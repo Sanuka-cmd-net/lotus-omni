@@ -1,10 +1,16 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-// lotus_l1d_cache - V7.9 VIVADO COMPATIBLE
+// lotus_l1d_cache - V8.0 FULL-LINE RESPONSE
+//
+// FIX L1D-004 (THIS VERSION): cpu_resp_data widened from 64-bit word to
+//   512-bit FULL cache line. The tensor engine streams 512-bit lines, but the
+//   old 64-bit word-select returned only one 64-bit word, corrupting tensor
+//   data (every-other-element zeros). The scalar core top now selects its
+//   64-bit word by address offset (see lotus_omni_core_top_v2 load path).
+//
 // FIX L1D-001: Removed if(!rst_n) from BRAM write always_ff - preserves BRAM inference
 // FIX L1D-002: RETRY serves fill_data_q (new line) not stale evicted data
-// FIX L1D-003: Removed automatic variable from always_comb - Vivado incompatible.
-//              resp_line moved to module-scope logic signal, driven in always_comb.
+// FIX L1D-003: Removed automatic variable from always_comb - Vivado incompatible
 //////////////////////////////////////////////////////////////////////////////////
 
 module lotus_l1d_cache #(
@@ -22,7 +28,7 @@ module lotus_l1d_cache #(
     input  logic [7:0]            cpu_req_wmask,
     output logic                  cpu_req_ready,
     output logic                  cpu_resp_valid,
-    output logic [DATA_WIDTH-1:0] cpu_resp_data,
+    output logic [LINE_SIZE-1:0]  cpu_resp_data,   // V8.0: 512-bit full line
     output logic                  cpu_resp_hit,
     output logic                  mem_req_valid,
     output logic                  mem_req_rw,
@@ -96,16 +102,12 @@ module lotus_l1d_cache #(
     logic [TAG_BITS+1:0]         tag_to_write;
     logic [INDEX_BITS-1:0]       write_index;
 
-    // Writeback storage
     logic [DATA_WIDTH_LOCAL-1:0] writeback_data;
     logic [TAG_BITS-1:0]         writeback_tag;
 
-    // FIX L1D-002: Holds fill data from ALLOCATE so RETRY can serve correct line
     logic [DATA_WIDTH_LOCAL-1:0] fill_data_q;
 
-    // FIX L1D-003: Module-scope wire replaces illegal automatic variable in always_comb
-    // Vivado does not support automatic local variables inside always_comb blocks.
-    // Moving resp_line to module scope as a plain logic signal fixes the red error.
+    // V8.0: module-scope response line (Vivado-compatible, no automatic var)
     logic [DATA_WIDTH_LOCAL-1:0] resp_line;
 
     // =========================================================================
@@ -180,7 +182,6 @@ module lotus_l1d_cache #(
                     end
                 end
 
-                // FIX L1D-002: Latch fill data so RETRY can serve it correctly
                 ALLOCATE: begin
                     if (mem_resp_valid)
                         fill_data_q <= mem_resp_data;
@@ -195,8 +196,6 @@ module lotus_l1d_cache #(
 
     // =========================================================================
     // FIX L1D-001: BRAM write always_ff - NO if(!rst_n) branch.
-    // Any reset condition inside this block prevents BRAM inference in Vivado.
-    // The default data_ram_we<=0 at the top safely covers the reset case.
     // =========================================================================
     always_ff @(posedge clk) begin
         data_ram_we   <= 1'b0;
@@ -236,11 +235,10 @@ module lotus_l1d_cache #(
                 end
             end
 
-            default: ; // defaults at top already handle this
+            default: ;
         endcase
     end
 
-    // Actual BRAM write operations
     always_ff @(posedge clk) begin
         if (data_ram_we) data_ram[write_index] <= data_to_write;
     end
@@ -253,7 +251,6 @@ module lotus_l1d_cache #(
     // MERGED DATA - for write-hit and write-after-fill
     // =========================================================================
     always_comb begin
-        // FIX L1D-002: In RETRY use fill_data_q (new line) as base for merge
         merged_data = (state == RETRY) ? fill_data_q : data_read_out;
 
         if ((state == COMPARE && is_hit && req_rw_q) ||
@@ -267,7 +264,7 @@ module lotus_l1d_cache #(
                 3'b101: for (int i=0;i<8;i++) if (wmask_q[i]) merged_data[320 +(i*8)+:8] = data_q[(i*8)+:8];
                 3'b110: for (int i=0;i<8;i++) if (wmask_q[i]) merged_data[384 +(i*8)+:8] = data_q[(i*8)+:8];
                 3'b111: for (int i=0;i<8;i++) if (wmask_q[i]) merged_data[448 +(i*8)+:8] = data_q[(i*8)+:8];
-                default: ; // merged_data already set above
+                default: ;
             endcase
         end
     end
@@ -294,30 +291,17 @@ module lotus_l1d_cache #(
 
     // =========================================================================
     // OUTPUT COMBINATIONAL LOGIC
-    // FIX L1D-003: resp_line is now a module-scope logic signal (declared above).
-    //   Using an automatic local variable inside always_comb is not supported by
-    //   Vivado and causes a red syntax/elaboration error. Module-scope logic
-    //   driven inside always_comb is the correct Vivado-compatible approach.
+    // V8.0: cpu_resp_data returns the FULL 512-bit line. The scalar core top
+    //       selects its 64-bit word by address offset; the tensor engine uses
+    //       the whole line.
     // =========================================================================
     always_comb begin
         cpu_req_ready  = (state == IDLE);
         cpu_resp_valid = (state == COMPARE && is_hit) || (state == RETRY);
         cpu_resp_hit   = cpu_resp_valid;
 
-        // FIX L1D-002 + L1D-003: select correct line source without automatic var
-        resp_line = (state == RETRY) ? fill_data_q : data_read_out;
-
-        case (addr_q.offset[5:3])
-            3'b000: cpu_resp_data = resp_line[63:0];
-            3'b001: cpu_resp_data = resp_line[127:64];
-            3'b010: cpu_resp_data = resp_line[191:128];
-            3'b011: cpu_resp_data = resp_line[255:192];
-            3'b100: cpu_resp_data = resp_line[319:256];
-            3'b101: cpu_resp_data = resp_line[383:320];
-            3'b110: cpu_resp_data = resp_line[447:384];
-            3'b111: cpu_resp_data = resp_line[511:448];
-            default: cpu_resp_data = {DATA_WIDTH{1'b0}};
-        endcase
+        resp_line     = (state == RETRY) ? fill_data_q : data_read_out;
+        cpu_resp_data = resp_line;   // V8.0: full 512-bit line
 
         mem_req_valid = (state == WRITEBACK) || (state == ALLOCATE);
         mem_req_rw    = (state == WRITEBACK);

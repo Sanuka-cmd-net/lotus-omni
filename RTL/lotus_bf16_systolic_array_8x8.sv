@@ -6,14 +6,23 @@
 ////////////////////////////////////////////////////////////////////////////////
 // Company:       Lotus Omni (Fabless AI Semiconductor)
 // Engineer:      Sanuka Nethmira Amarasekara
-// Module Name:   lotus_bf16_systolic_array_8x8 - V4.2 GENVAR FIX
+// Module Name:   lotus_bf16_systolic_array_8x8 - V5.1 CLEAR-ACC ALIGNMENT FIX
 //
-// V4.2 CRITICAL FIX (vs V4.1):
+// FIX V5.1 (THIS VERSION): CLEAR_ACC PIPELINE ALIGNMENT
+//   Bug in V5.0: clear_acc was fed COMBINATIONALLY to the PEs, but a_in/b_in
+//        go through the a_in_reg/b_in_reg input-register stage. So clear_acc
+//        arrived at the PE adder ONE CYCLE EARLY relative to the first product.
+//        Result: first product dropped / partial sums wiped → only some results
+//        non-zero (0x4, 0x6) instead of all 64 = 0x30.
 //
-// FIX SA-013: Mixed genvar/int loop variables caused Vivado 2025.2
-//             elaboration error. Both loops in the same generate
-//             block must use 'genvar'.
+//   Fix: Register clear_acc alongside a_in_reg/b_in_reg (clear_acc_reg) so it
+//        travels the SAME pipeline depth as the data. Now clear aligns exactly
+//        with the first product landing at the PE adder.
 //
+// PRESERVED from V5.0:
+//   - Outer-product broadcast accumulation (a_in_reg[i] row, b_in_reg[j] col)
+//   - Each PE accumulates locally, no vertical acc chain
+//   - genvar-only generate loops, module interface unchanged
 ////////////////////////////////////////////////////////////////////////////////
 
 module lotus_bf16_systolic_array_8x8_v3 (
@@ -27,21 +36,15 @@ module lotus_bf16_systolic_array_8x8_v3 (
 );
 
     // =========================================================================
-    // INTERNAL WIRES (module scope)
-    // =========================================================================
-    logic [15:0] a_wire [0:7][0:8];
-    logic [15:0] b_wire [0:8][0:7];
-    logic [31:0] acc_wire [0:7][0:7];
-    logic [31:0] acc_in_wire [0:7][0:7];
-    logic pe_enable;
-
-    assign pe_enable = enable;
-
-    // =========================================================================
-    // INPUT REGISTERS
+    // INPUT REGISTERS + V5.1: clear_acc REGISTERED (aligned with data path)
+    //   a_in/b_in are registered here (1 stage) before reaching the PE.
+    //   clear_acc MUST also be registered here so it reaches the PE adder at
+    //   the SAME cycle as the first product. (V5.0 fed it combinationally,
+    //   making it arrive 1 cycle early.)
     // =========================================================================
     logic [15:0] a_in_reg [0:7];
     logic [15:0] b_in_reg [0:7];
+    logic        clear_acc_reg;      // V5.1 NEW
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -49,39 +52,26 @@ module lotus_bf16_systolic_array_8x8_v3 (
                 a_in_reg[k] <= 16'd0;
                 b_in_reg[k] <= 16'd0;
             end
+            clear_acc_reg <= 1'b0;
         end else if (enable) begin
             for (int k = 0; k < 8; k++) begin
                 a_in_reg[k] <= a_in[k];
                 b_in_reg[k] <= b_in[k];
             end
+            clear_acc_reg <= clear_acc;   // V5.1: aligned with data
         end
     end
 
     // =========================================================================
-    // INPUT MAPPING
+    // PE OUTPUT WIRES
     // =========================================================================
-    genvar ii;
-    generate
-        for (ii = 0; ii < 8; ii++) begin : map_inputs
-            assign a_wire[ii][0] = a_in_reg[ii];
-            assign b_wire[0][ii] = b_in_reg[ii];
-        end
-    endgenerate
+    logic [31:0] acc_wire [0:7][0:7];
 
     // =========================================================================
-    // ACCUMULATOR MUX (PE-013: use genvar for BOTH loops)
-    // =========================================================================
-    genvar im, jm;
-    generate
-        for (im = 0; im < 8; im++) begin : acc_mux_row
-            for (jm = 0; jm < 8; jm++) begin : acc_mux_col
-                assign acc_in_wire[im][jm] = (im == 0) ? 32'h0 : acc_wire[im-1][jm];
-            end
-        end
-    endgenerate
-
-    // =========================================================================
-    // PE GRID - 8x8 systolic array
+    // PE GRID - 8x8 OUTER-PRODUCT ACCUMULATION
+    //   PE(i,j).a_in = a_in_reg[i]  (broadcast across row i)
+    //   PE(i,j).b_in = b_in_reg[j]  (broadcast down column j)
+    //   PE(i,j).clear_acc = clear_acc_reg (V5.1: aligned with data)
     // =========================================================================
     genvar i, j;
     generate
@@ -90,13 +80,13 @@ module lotus_bf16_systolic_array_8x8_v3 (
                 lotus_bf16_tensor_pe u_pe (
                     .clk       (clk),
                     .rst_n     (rst_n),
-                    .enable    (pe_enable),
-                    .clear_acc (clear_acc),
-                    .a_in      (a_wire[i][j]),
-                    .b_in      (b_wire[i][j]),
-                    .in_acc    (acc_in_wire[i][j]),
-                    .a_out     (a_wire[i][j+1]),
-                    .b_out     (b_wire[i+1][j]),
+                    .enable    (enable),
+                    .clear_acc (clear_acc_reg),   // V5.1: was clear_acc
+                    .a_in      (a_in_reg[i]),
+                    .b_in      (b_in_reg[j]),
+                    .in_acc    (32'sd0),
+                    .a_out     (),
+                    .b_out     (),
                     .out_acc   (acc_wire[i][j])
                 );
                 assign pe_results[i][j] = acc_wire[i][j];

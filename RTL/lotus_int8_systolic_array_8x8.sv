@@ -1,12 +1,16 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // Company:       Lotus Omni (Fabless AI Semiconductor)
 // Engineer:      Sanuka Nethmira Amarasekara
-// Module Name:   lotus_int8_systolic_array_8x8
-// Description:   8x8 Systolic Array for INT8 Matrix Multiplication
+// Module Name:   lotus_int8_systolic_array_8x8 - V2.0 OUTER-PRODUCT BROADCAST
 //
-// FIX: Corrected PE port mapping to match the actual lotus_tensor_pe module
-//////////////////////////////////////////////////////////////////////////////////
+// FIX V2.0: Converted from wavefront to OUTER-PRODUCT BROADCAST (matches BF16 V5.1).
+//   - a_in_reg[i] broadcast to all PEs in row i, b_in_reg[j] to column j
+//   - clear_acc REGISTERED (clear_acc_reg) to align with data path
+//   - in_acc fed back from out_acc (lotus_tensor_pe uses in_acc pass-through,
+//     so feedback makes it a local accumulator)
+//   - No wavefront a_reg/b_reg shifting
+////////////////////////////////////////////////////////////////////////////////
 
 module lotus_int8_systolic_array_8x8 (
     input  logic clk,
@@ -18,57 +22,58 @@ module lotus_int8_systolic_array_8x8 (
     output logic signed [31:0] pe_results [0:7][0:7]
 );
 
-    // Internal pipelining registers for systolic data flow
-    logic signed [7:0]  a_reg [0:7][0:7];
-    logic signed [7:0]  b_reg [0:7][0:7];
-    logic signed [31:0] p_out [0:7][0:7];
+    // =========================================================================
+    // INPUT REGISTERS + clear_acc REGISTERED (aligned with data path)
+    // =========================================================================
+    logic signed [7:0] a_in_reg [0:7];
+    logic signed [7:0] b_in_reg [0:7];
+    logic              clear_acc_reg;
 
-    // Generate 8x8 PE Array
-    genvar row, col;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int k = 0; k < 8; k++) begin
+                a_in_reg[k] <= 8'sd0;
+                b_in_reg[k] <= 8'sd0;
+            end
+            clear_acc_reg <= 1'b0;
+        end else if (enable) begin
+            for (int k = 0; k < 8; k++) begin
+                a_in_reg[k] <= a_in[k];
+                b_in_reg[k] <= b_in[k];
+            end
+            clear_acc_reg <= clear_acc;
+        end
+    end
+
+    // =========================================================================
+    // PE OUTPUT / FEEDBACK WIRES
+    //   acc_wire[i][j] carries out_acc BACK into in_acc (local accumulation)
+    // =========================================================================
+    logic signed [31:0] acc_wire [0:7][0:7];
+
+    // =========================================================================
+    // PE GRID - 8x8 OUTER-PRODUCT ACCUMULATION
+    // =========================================================================
+    genvar i, j;
     generate
-        for (row = 0; row < 8; row++) begin : gen_row
-            for (col = 0; col < 8; col++) begin : gen_col
-                
-                // Processing Element Instantiation (Fixed Port Mapping)
+        for (i = 0; i < 8; i++) begin : row_gen
+            for (j = 0; j < 8; j++) begin : col_gen
                 lotus_tensor_pe u_pe (
-                    .clk(clk),
-                    .rst_n(rst_n),
-                    .enable(enable),
-                    .clear_acc(clear_acc),
-                    .in_a(a_reg[row][col]),         // Matches logic signed [7:0] in_a
-                    .in_b(b_reg[row][col]),         // Matches logic signed [7:0] in_b
-                    .in_acc(32'sd0),                // Assuming partial sums aren't passed vertically in this simple version, or connect properly if needed
-                    .sparsity_en(1'b0),             // Connect to sparsity logic if needed, 0 for now
-                    .out_a(),                       // Ignored here, handled by a_reg shifting
-                    .out_b(),                       // Ignored here, handled by b_reg shifting
-                    .out_acc(p_out[row][col])       // Matches logic signed [31:0] out_acc
+                    .clk       (clk),
+                    .rst_n     (rst_n),
+                    .enable    (enable),
+                    .clear_acc (clear_acc_reg),
+                    .sparsity_en(1'b0),
+                    .in_a      (a_in_reg[i]),
+                    .in_b      (b_in_reg[j]),
+                    .in_acc    (acc_wire[i][j]),   // feedback: out_acc -> in_acc
+                    .out_a     (),
+                    .out_b     (),
+                    .out_acc   (acc_wire[i][j])
                 );
-
-                // Output assignment
-                assign pe_results[row][col] = p_out[row][col];
-
-                // Systolic Data Flow Logic (Pipeline registers)
-                always_ff @(posedge clk or negedge rst_n) begin
-                    if (!rst_n) begin
-                        if (col < 7) a_reg[row][col+1] <= 8'sd0;
-                        if (row < 7) b_reg[row+1][col] <= 8'sd0;
-                    end else if (enable) begin
-                        // Pass 'A' horizontally
-                        if (col < 7) a_reg[row][col+1] <= a_reg[row][col];
-                        // Pass 'B' vertically
-                        if (row < 7) b_reg[row+1][col] <= b_reg[row][col];
-                    end
-                end
+                assign pe_results[i][j] = acc_wire[i][j];
             end
         end
     endgenerate
 
-    // Input assignments to the edges of the array
-    always_comb begin
-        for (int i = 0; i < 8; i++) begin
-            a_reg[i][0] = a_in[i];  // Feed A into the left edge
-            b_reg[0][i] = b_in[i];  // Feed B into the top edge
-        end
-    end
-
-endmodule   
+endmodule

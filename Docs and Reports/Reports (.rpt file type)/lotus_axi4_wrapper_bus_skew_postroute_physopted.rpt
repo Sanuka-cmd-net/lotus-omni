@@ -1,0 +1,16 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
+| Date         : Thu Aug  6 19:04:22 2026
+| Host         : SanukaPCs running 64-bit major release  (build 9200)
+| Command      : report_bus_skew -warn_on_violation -file lotus_axi4_wrapper_bus_skew_postroute_physopted.rpt -pb lotus_axi4_wrapper_bus_skew_postroute_physopted.pb -rpx lotus_axi4_wrapper_bus_skew_postroute_physopted.rpx
+| Design       : lotus_axi4_wrapper
+| Device       : 7a200tl-ffv1156
+| Speed File   : -2L  PRODUCTION 1.14 2018-01-25
+| Design State : Physopt postRoute
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Bus Skew Report
+
+No bus skew constraints
+

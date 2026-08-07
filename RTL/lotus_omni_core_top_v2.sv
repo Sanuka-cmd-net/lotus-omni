@@ -1,20 +1,19 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-// lotus_omni_core_top_v2 - V8.0 TIMING FIX (CDB PIPELINE + COUNTER PIPELINE)
+// lotus_omni_core_top_v2 - V10.0 FULL-LINE L1D + TENSOR DATAFLOW
 // Engineer:      Sanuka Nethmira Amarasekara (Lotus Omni)
 // Target:        Xilinx Artix-7 xc7a200t
 //
-// TIMING FIX ROB-TIMING-01: Pipeline CDB→ROB path.
-//   Breaks rs_issue_valid → csr_issue_valid → rob_cdb_exception →
-//   ROB bypass → commit → occupancy_local chain (12 levels, -1.739ns).
-//   ROB sees CDB 1 cycle later - architecturally safe.
+// V10.0 (THIS VERSION):
+//   • Scalar load path now selects the correct 64-bit word from the 512-bit
+//     full line returned by lotus_l1d_cache V8.0 (load_offset_q captures
+//     agu_addr[5:0]; pending_load_offset latches it for the response).
+//   • Tensor dataflow fix retained: tensor_clear = rob_flush | feed_first,
+//     BF16/INT8 arrays .clear_acc -> tensor_clear, engine .feed_first wired.
 //
-// TIMING FIX PMU-TIMING-01: Pipeline performance counter.
-//   Breaks 23-level carry chain (14× CARRY4, -1.707ns).
-//   commit_count_pmu registered before 64-bit addition.
-//
-// Previous fixes preserved: PRF pipeline, LSQ commit pipeline,
-// LSQ forwarding pipeline, reset buffering.
+// Previous timing fixes preserved: ROB-TIMING-01 (CDB pipeline),
+//   PMU-TIMING-01 (counter pipeline), PRF pipeline, LSQ pipelines,
+//   reset buffering.
 //////////////////////////////////////////////////////////////////////////////////
 
 module lotus_omni_core_top_v2 #(
@@ -207,7 +206,6 @@ module lotus_omni_core_top_v2 #(
     logic [3:0][6:0]  prf_wr_rob_p;
     logic [6:0]       rs_issue_rob_idx_q [0:3];
 
-    // === TIMING FIX #1: PRF registered-commit notification wires ===
     logic        prf_commit_valid;
     logic [6:0]  prf_commit_addr;
     logic        prf_stall;
@@ -241,7 +239,6 @@ module lotus_omni_core_top_v2 #(
 
     // =========================================================================
     // FIX Bug #5 (CORE-PRFREADY)
-    // === TIMING FIX #2: prf_ready_bits updates from REGISTERED PRF commit ===
     // =========================================================================
     logic [127:0] prf_ready_bits;
     always_ff @(posedge clk) begin
@@ -274,7 +271,7 @@ module lotus_omni_core_top_v2 #(
     logic [63:0] illegal_csr_cause = 64'h2;
 
     // =========================================================================
-    // TENSOR ENGINE & MEMORY ARBITER INTERNAL WIRES (FIX TOP-TENSOR-001)
+    // TENSOR ENGINE & MEMORY ARBITER INTERNAL WIRES
     // =========================================================================
     logic        arb_to_l1d_req_valid, arb_to_l1d_req_rw;
     logic [63:0] arb_to_l1d_req_addr, arb_to_l1d_req_data;
@@ -291,6 +288,13 @@ module lotus_omni_core_top_v2 #(
     logic [63:0] ten_cdb_data;
     logic        engine_ready;
     logic        tensor_array_enable;
+
+    // =========================================================================
+    // V9.0 TENSOR DATAFLOW FIX: clear_acc wiring
+    // =========================================================================
+    logic        tensor_feed_first;
+    logic        tensor_clear;
+    assign tensor_clear = rob_flush_reg | tensor_feed_first;
 
     // =========================================================================
     // FIX Bug #4 (CORE-CDBMUX)
@@ -353,11 +357,6 @@ module lotus_omni_core_top_v2 #(
 
     // =========================================================================
     // === TIMING FIX ROB-TIMING-01: Pipeline CDB→ROB path ===
-    //   Breaks rs_issue_valid → csr_issue_valid → rob_cdb_exception →
-    //   ROB CDB bypass → commit_exc_valid_mux → commit_cnt →
-    //   occupancy_local/D chain (12 levels, -1.739ns WNS).
-    //   ROB sees CDB 1 cycle later - architecturally safe because
-    //   writeback always precedes commit in the pipeline.
     // =========================================================================
     logic [3:0]  rob_cdb_valid_q;
     logic [6:0]  rob_cdb_rob_idx_q [0:3];
@@ -478,29 +477,36 @@ module lotus_omni_core_top_v2 #(
     logic         l2_l1d_resp_valid;
 
     // =========================================================================
-    // === TIMING FIX LSQ-TIMING-03: Pipeline load p_dest ===
+    // === TIMING FIX LSQ-TIMING-03: Pipeline load p_dest + offset (V10.0) ===
     // =========================================================================
     logic [6:0] load_pdest_q;
+    logic [5:0] load_offset_q;
+
     always_ff @(posedge clk) begin
-        if (!rst_n_g)
-            load_pdest_q <= 7'h00;
-        else if (agu_valid && !agu_is_store)
-            load_pdest_q <= rs_issue_uops[2].p_dest;
+        if (!rst_n_g) begin
+            load_pdest_q  <= 7'h00;
+            load_offset_q <= 6'd0;
+        end else if (agu_valid && !agu_is_store) begin
+            load_pdest_q  <= rs_issue_uops[2].p_dest;
+            load_offset_q <= agu_addr[5:0];      // V10.0: capture word offset
+        end
     end
 
     // =========================================================================
-    // LOAD RESPONSE STATE MACHINE (LSQ-TIMING-03 aligned)
+    // LOAD RESPONSE STATE MACHINE (V10.0: select 64-bit word from 512-bit line)
     // =========================================================================
     logic [6:0] pending_load_pdest;
+    logic [5:0] pending_load_offset;
     logic       load_state;
 
     always_ff @(posedge clk) begin
         if (!rst_n_g || rob_flush_reg) begin
-            pending_load_pdest <= 7'h00;
-            load_state         <= 1'b0;
-            load_cdb_valid     <= 1'b0;
-            load_cdb_p_dest    <= 7'h00;
-            load_cdb_data      <= 64'h0;
+            pending_load_pdest  <= 7'h00;
+            pending_load_offset <= 6'd0;
+            load_state          <= 1'b0;
+            load_cdb_valid      <= 1'b0;
+            load_cdb_p_dest     <= 7'h00;
+            load_cdb_data       <= 64'h0;
         end else begin
             load_cdb_valid <= 1'b0;
             case (load_state)
@@ -510,8 +516,9 @@ module lotus_omni_core_top_v2 #(
                         load_cdb_p_dest <= load_pdest_q;
                         load_cdb_data   <= load_fwd_data;
                     end else if (load_needs_cache) begin
-                        pending_load_pdest <= load_pdest_q;
-                        load_state         <= 1'b1;
+                        pending_load_pdest  <= load_pdest_q;
+                        pending_load_offset <= load_offset_q;   // V10.0: latch offset
+                        load_state          <= 1'b1;
                     end
                 end
                 1'b1: begin
@@ -523,7 +530,8 @@ module lotus_omni_core_top_v2 #(
                     end else if (l1d_cpu_resp_valid) begin
                         load_cdb_valid  <= 1'b1;
                         load_cdb_p_dest <= pending_load_pdest;
-                        load_cdb_data   <= l1d_cpu_resp_data[63:0];
+                        // V10.0: select correct 64-bit word from 512-bit full line
+                        load_cdb_data   <= l1d_cpu_resp_data[{pending_load_offset[5:3],6'd0} +: 64];
                         load_state      <= 1'b0;
                     end
                 end
@@ -601,14 +609,14 @@ module lotus_omni_core_top_v2 #(
     lotus_bf16_systolic_array_8x8_v3 u_tensor_bf16 (
         .clk(clk), .rst_n(rst_n_g),
         .enable(tensor_array_enable & tensor_en_csr),
-        .clear_acc(rob_flush_reg),
+        .clear_acc(tensor_clear),
         .a_in(tensor_bf16_a), .b_in(tensor_bf16_b), .pe_results(tensor_bf16_results)
     );
 
     lotus_int8_systolic_array_8x8 u_tensor_int8 (
         .clk(clk), .rst_n(rst_n_g),
         .enable(tensor_array_enable & tensor_en_csr & ~precision_mode[0]),
-        .clear_acc(rob_flush_reg),
+        .clear_acc(tensor_clear),
         .a_in(tensor_int8_a), .b_in(tensor_int8_b), .pe_results(tensor_int8_out)
     );
 
@@ -641,8 +649,6 @@ module lotus_omni_core_top_v2 #(
 
     // =========================================================================
     // === TIMING FIX PMU-TIMING-01: Pipeline performance counter ===
-    //   Breaks 23-level carry chain (14× CARRY4, -1.707ns WNS).
-    //   commit_count_pmu registered before 64-bit addition.
     // =========================================================================
     always_comb begin
         commit_count_pmu = '0;
@@ -781,11 +787,11 @@ module lotus_omni_core_top_v2 #(
         .clk(clk), .rst_n(rst_n_g), .flush(rob_flush_reg),
         .dispatch_valid(rob_dispatch_valid), .dispatch_uop(rob_dispatch_uop),
         .rob_ready(rob_ready), .alloc_rob_idx(rob_alloc_idx),
-        .cdb_valid(rob_cdb_valid_q),              // REGISTERED (was: rob_cdb_valid)
-        .cdb_rob_idx(rob_cdb_rob_idx_q),          // REGISTERED (was: rob_cdb_rob_idx)
-        .cdb_data(rob_cdb_data_q),                // REGISTERED (was: rob_cdb_data)
-        .cdb_exception(rob_cdb_exception_q),      // REGISTERED (was: rob_cdb_exception)
-        .cdb_exc_cause(rob_cdb_exc_cause_q),      // REGISTERED (was: rob_cdb_exc_cause)
+        .cdb_valid(rob_cdb_valid_q),
+        .cdb_rob_idx(rob_cdb_rob_idx_q),
+        .cdb_data(rob_cdb_data_q),
+        .cdb_exception(rob_cdb_exception_q),
+        .cdb_exc_cause(rob_cdb_exc_cause_q),
         .commit_valid(rob_commit_valid), .commit_p_dest(rob_commit_p_dest),
         .commit_p_old_dest(rob_commit_p_old_dest),
         .commit_data(rob_commit_data), .commit_is_store(rob_commit_is_store),
@@ -842,7 +848,7 @@ module lotus_omni_core_top_v2 #(
         .misalign_exception(agu_misalign), .misalign_addr(agu_misalign_addr)
     );
 
-    // === TIMING FIX LSQ-TIMING-02: LSQ uses REGISTERED commit (1 cycle pipelined) ===
+    // === TIMING FIX LSQ-TIMING-02: LSQ uses REGISTERED commit ===
     lotus_lsq_masterpiece u_lsq (
         .clk(clk), .rst_n(rst_n_g), .flush(rob_flush_reg),
         .alloc_valid(rs_issue_valid[2] && rs_issue_uops[2].is_memory), .alloc_is_store(rs_issue_valid[2] && rs_issue_uops[2].is_memory && (rs_issue_uops[2].opcode[6:0] == 7'b0100011)),
@@ -938,6 +944,7 @@ module lotus_omni_core_top_v2 #(
         .weight_bf16_out  (tensor_weight_bf16), .input_bf16_out   (tensor_input_bf16),
         .weight_int8_out  (tensor_weight_int8), .input_int8_out   (tensor_input_int8),
         .array_enable     (tensor_array_enable), .tensor_array_busy(tensor_array_busy),
+        .feed_first       (tensor_feed_first),
         .bf16_results     (tensor_bf16_results), .int8_results     (tensor_int8_out),
         .tensor_cdb_valid (ten_cdb_valid), .tensor_cdb_p_dest(ten_cdb_p_dest), .tensor_cdb_data(ten_cdb_data),
         .tensor_cdb_ready (1'b1), .engine_ready     (engine_ready)
