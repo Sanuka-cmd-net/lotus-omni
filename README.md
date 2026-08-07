@@ -226,20 +226,25 @@ iteration log is in [`Docs and Reports/ARCHITECTURE.md`](Docs%20and%20Reports/AR
    - `tb_lotus_axi4_wrapper` - AXI control-plane demonstration
 
 ---
-
 ## Repository Structure
 
 ```
 lotus-omni/
-├── RTL/                 # 30 SystemVerilog source files
-├── TB/                  # Self-checking testbenches
-├── Constraints/         # Out-of-context timing constraints (80 MHz)
-├── Docs and Reports/    # ARCHITECTURE.md and raw Vivado reports
-├── images/              # architecture.png, implementation_complete.png
+├── RTL/                          # 30 SystemVerilog source files
+├── TB/                           # Self-checking testbenches
+├── Constraints/                  # Out-of-context timing constraints (80 MHz)
+├── Docs and Reports/
+│   ├── Architecture.md           # Full microarchitecture reference (30 modules)
+│   ├── Reports (.rpt file type)/ # Raw Vivado timing / utilization / DRC reports
+│   └── Reported screenshot/      # Vivado design screenshots
+│                                 #   (Dataflow, Elaborated, Synthesized,
+│                                 #    Implemented, Schematic, floorplan)
+├── Simulation Screenshot/        # Behavioural-simulation waveforms
+│                                 #   (Demo 1 AXI, Demo 2 IFU, Demo 3 full-core+tensor)
+├── .gitattributes
+├── .gitignore
 └── README.md
 ```
-
----
 
 ## Documentation
 
