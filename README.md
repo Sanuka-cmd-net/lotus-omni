@@ -53,41 +53,64 @@ the physical register file over the Common Data Bus.
 ```mermaid
 flowchart TB
     subgraph FE["FRONT-END"]
-        PC["PC"] --> IFU["IFU (16-wide)"]
-        TAGE["TAGE +BTB +GHR"] -->|pred| IFU
-        IFU -->|req| L1I["L1I CACHE (512-set DM)"]
+        PC["PC"] --> IFU["IFU 16-wide"]
+        TAGE["TAGE + BTB + GHR"] -->|pred| IFU
+        IFU -->|req| L1I["L1I CACHE 512-set DM"]
         L1I -->|hit| IFU
-        L1I -->|512b| DEC["DECODER (16-wide)"]
-        DEC -->|16 uops| REN["RENAMER (RAT + FreeList)"]
+        L1I -->|512b| DEC["DECODER 16-wide"]
+        DEC -->|16 uops| REN["RENAMER RAT+FreeList"]
     end
+
     subgraph MEM["MEMORY HIERARCHY"]
-        L2["L2 CACHE (16-set 4-way PLRU)"]
-        DRAMG["DRAM GATE"] --> DRAM["DRAM PORT"]
-        L2 --> DRAMG
+        L2["L2 CACHE 16-set 4-way PLRU"]
+        DRAMG["DRAM GATE"]
+        DRAM["DRAM PORT"]
+        L2 -->|1024b beat| DRAMG
+        DRAMG --> DRAM
     end
+
     subgraph BE["BACK-END"]
-        REN -->|4 ren_uops| RS["RESERVATION STATIONS (partitioned)"]
-        RS -->|dispatch| ROB["ROB (32) in-order commit"]
-        RS -->|P0| ALU["ALU"] & BR["BRANCH"] & AGU["AGU + LSQ"] & TCSR["TENSOR / CSR"]
-        ALU & BR & AGU & TCSR --> CDB["CDB MUX (4, registered)"]
-        CDB --> PRF["PRF (128x64, 8R4W)"]
+        REN -->|4 ren uops| RS["RESERVATION STATIONS partitioned"]
+        RS -->|dispatch| ROB["ROB 32 in-order commit"]
+        RS -->|P0| ALU["ALU"]
+        RS -->|P1| BR["BRANCH"]
+        RS -->|P2| AGU["AGU + LSQ"]
+        RS -->|P3| TCSR["TENSOR / CSR"]
+        ALU --> CDB["CDB MUX 4-port registered"]
+        BR --> CDB
+        AGU --> CDB
+        TCSR --> CDB
+        CDB --> PRF["PRF 128x64 8R4W"]
         CDB --> ROB
-        ROB -->|commit(4)| PRF
+        ROB -->|commit x4| PRF
         CDB -. wakeup .-> RS
     end
+
     subgraph DMEM["DATA MEMORY"]
-        AGU --> LSQ["LSQ (16) STL fwd"]
-        LSQ --> L1D["L1D CACHE (64-line WB)"]
+        AGU --> LSQ["LSQ 16 STL fwd"]
+        LSQ --> L1D["L1D CACHE 64-line WB"]
     end
+
     subgraph TENS["TENSOR ACCELERATOR"]
-        TE["TENSOR ENGINE (IDLE-MEM-FEED-DRAIN-WB)"]
-        TE --> BF16["8x8 BF16 SYS"] & INT8["8x8 INT8 SYS"]
-        SP["SPARSITY 2:4"] --> BF16
-        TE --> ARB["TENSOR MEM ARBITER (CPU-priority)"]
+        TE["TENSOR ENGINE IDLE-MEM-FEED-DRAIN-WB"]
+        BF16["8x8 BF16 SYS"]
+        INT8["8x8 INT8 SYS"]
+        SP["SPARSITY 2:4"]
+        ARB["TENSOR MEM ARBITER CPU-priority"]
+        TE --> BF16
+        TE --> INT8
+        SP --> BF16
+        TE --> ARB
     end
+
     subgraph NOC["INTERCONNECT"]
-        NOCR["NOC ROUTER (5-port XY)"] --> FG["FLOW GATES"] --> TXRX["tx/rx"]
+        NOCR["NOC ROUTER 5-port XY"]
+        FG["FLOW GATES"]
+        TXRX["tx / rx"]
+        NOCR --> FG
+        FG --> TXRX
     end
+
     L1I -. miss .-> L2
     L1D -. miss .-> L2
     ARB -->|tensor req| L1D
