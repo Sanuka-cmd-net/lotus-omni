@@ -44,84 +44,16 @@ continues executing, sharing the memory hierarchy through a CPU-priority arbiter
 
 ## Architecture
 
-The scalar path runs
+The figure below shows the complete data-flow architecture. The scalar path runs
 `Fetch -> L1I -> Decode -> Rename -> Reservation Stations -> {ALU, Branch, AGU/LSQ,
 Tensor/CSR} -> CDB -> PRF/ROB -> Commit`. The tensor path streams weights and activations
 through a CPU-priority memory arbiter into dual systolic arrays, and writes results back to
 the physical register file over the Common Data Bus.
 
-```mermaid
-flowchart TB
-    %% ================= FRONT-END =================
-    subgraph FE["FRONT-END"]
-        PC["PC"] --> IFU["IFU (16-wide)"]
-        TAGE["TAGE +BTB +GHR"] -->|pred| IFU
-        IFU -->|req| L1I["L1I CACHE (512-set DM)"]
-        L1I -->|hit| IFU
-        L1I -->|512b| DEC["DECODER (16-wide)"]
-        DEC -->|16 uops| REN["RENAMER (RAT + FreeList)"]
-    end
-
-    %% ================= MEMORY HIERARCHY =================
-    subgraph MEM["MEMORY HIERARCHY"]
-        L2["L2 CACHE (16-set 4-way PLRU)"]
-        DRAMG["DRAM GATE"]
-        DRAM["DRAM PORT"]
-        L2 -->|1024b beat| DRAMG --> DRAM
-    end
-
-    %% ================= BACK-END =================
-    subgraph BE["BACK-END"]
-        REN -->|4 ren_uops| RS["RESERVATION STATIONS (partitioned)"]
-        RS -->|dispatch| ROB["ROB (32) in-order commit, banked RAM"]
-        RS -->|P0| ALU["ALU"]
-        RS -->|P1| BR["BRANCH"]
-        RS -->|P2| AGU["AGU + LSQ"]
-        RS -->|P3| TCSR["TENSOR / CSR"]
-        ALU & BR & AGU & TCSR --> CDB["CDB MUX (4, registered)"]
-        CDB --> PRF["PRF (128x64, 8R4W)"]
-        CDB --> ROB
-        ROB -->|commit(4)| PRF
-        CDB -. wakeup .-> RS
-    end
-
-    %% ================= DATA MEMORY =================
-    subgraph DMEM["DATA MEMORY"]
-        AGU --> LSQ["LSQ (16) STL fwd"]
-        LSQ --> L1D["L1D CACHE (64-line WB)"]
-    end
-
-    %% ================= TENSOR ACCELERATOR =================
-    subgraph TENS["TENSOR ACCELERATOR"]
-        TE["TENSOR ENGINE FSM (IDLE-MEM-FEED-DRAIN-WB)"]
-        BF16["8x8 BF16 SYS (outer-product broadcast)"]
-        INT8["8x8 INT8 SYS (outer-product broadcast)"]
-        SP["SPARSITY 2:4 engine"] --> COMP["2:4 COMPRESS"]
-        TE --> BF16 & INT8
-        COMP --> BF16
-        TE --> ARB["TENSOR MEM ARBITER (CPU-priority)"]
-    end
-
-    %% ================= INTERCONNECT =================
-    subgraph NOC["INTERCONNECT"]
-        NOCR["NOC ROUTER (5-port XY, RR)"] --> FG["FLOW GATES"] --> TXRX["tx/rx"]
-    end
-
-    %% ================= CROSS LINKS =================
-    L1I -. miss .-> L2
-    L1D -. miss .-> L2
-    ARB -->|tensor req| L1D
-    ARB --> L2
-```
-
-### Data-Flow Summary
-
-| Path | Flow |
-|------|------|
-| Scalar | Fetch → L1I → Decode → Rename → RS → {ALU·BR·AGU/LSQ·TEN/CSR} → CDB → PRF/ROB → Commit |
-| Memory | LSQ → L1D → (miss) → L2 → (miss) → DRAM-gate → DRAM |
-| Tensor | Engine → Arbiter → L1D → L2 |
-| NoC | Router (5-port XY mesh) → Flow gates → tx/rx → neighbouring tiles |
+<!-- IMAGE 1: place your architecture block diagram at images/architecture.png -->
+<p align="center">
+  <img src="images/architecture.png" alt="LOTUS OMNI microarchitecture block diagram" width="900"/>
+</p>
 
 ---
 
@@ -192,7 +124,7 @@ Full mathematics, worked numerical examples, and per-module fix histories are do
 The design was implemented out-of-context with Vivado and closes timing at 80 MHz on the
 slowest Artix-7 speed grade. The screenshot below shows the post-route timing summary.
 
-<!-- IMAGE: place your Vivado timing summary screenshot at images/implementation_complete.png -->
+<!-- IMAGE 2: place your Vivado timing summary screenshot at images/implementation_complete.png -->
 <p align="center">
   <img src="images/implementation_complete.png" alt="Vivado implementation complete, timing met at 80 MHz" width="900"/>
 </p>
@@ -244,7 +176,7 @@ lotus-omni/
 ├── TB/                  # Self-checking testbenches
 ├── Constraints/         # Out-of-context timing constraints (80 MHz)
 ├── Docs and Reports/    # ARCHITECTURE.md and raw Vivado reports
-├── images/              # implementation_complete.png (Vivado timing summary)
+├── images/              # architecture.png, implementation_complete.png
 └── README.md
 ```
 
