@@ -50,12 +50,48 @@ Tensor/CSR} -> CDB -> PRF/ROB -> Commit`. The tensor path streams weights and ac
 through a CPU-priority memory arbiter into dual systolic arrays, and writes results back to
 the physical register file over the Common Data Bus.
 
-<!-- IMAGE 1: place your architecture block diagram at images/architecture.png -->
-<p align="center">
-  <img src="images/architecture.png" alt="LOTUS OMNI microarchitecture block diagram" width="900"/>
-</p>
-
----
+```mermaid
+flowchart TB
+    subgraph FE["FRONT-END"]
+        PC["PC"] --> IFU["IFU (16-wide)"]
+        TAGE["TAGE +BTB +GHR"] -->|pred| IFU
+        IFU -->|req| L1I["L1I CACHE (512-set DM)"]
+        L1I -->|hit| IFU
+        L1I -->|512b| DEC["DECODER (16-wide)"]
+        DEC -->|16 uops| REN["RENAMER (RAT + FreeList)"]
+    end
+    subgraph MEM["MEMORY HIERARCHY"]
+        L2["L2 CACHE (16-set 4-way PLRU)"]
+        DRAMG["DRAM GATE"] --> DRAM["DRAM PORT"]
+        L2 --> DRAMG
+    end
+    subgraph BE["BACK-END"]
+        REN -->|4 ren_uops| RS["RESERVATION STATIONS (partitioned)"]
+        RS -->|dispatch| ROB["ROB (32) in-order commit"]
+        RS -->|P0| ALU["ALU"] & BR["BRANCH"] & AGU["AGU + LSQ"] & TCSR["TENSOR / CSR"]
+        ALU & BR & AGU & TCSR --> CDB["CDB MUX (4, registered)"]
+        CDB --> PRF["PRF (128x64, 8R4W)"]
+        CDB --> ROB
+        ROB -->|commit(4)| PRF
+        CDB -. wakeup .-> RS
+    end
+    subgraph DMEM["DATA MEMORY"]
+        AGU --> LSQ["LSQ (16) STL fwd"]
+        LSQ --> L1D["L1D CACHE (64-line WB)"]
+    end
+    subgraph TENS["TENSOR ACCELERATOR"]
+        TE["TENSOR ENGINE (IDLE-MEM-FEED-DRAIN-WB)"]
+        TE --> BF16["8x8 BF16 SYS"] & INT8["8x8 INT8 SYS"]
+        SP["SPARSITY 2:4"] --> BF16
+        TE --> ARB["TENSOR MEM ARBITER (CPU-priority)"]
+    end
+    subgraph NOC["INTERCONNECT"]
+        NOCR["NOC ROUTER (5-port XY)"] --> FG["FLOW GATES"] --> TXRX["tx/rx"]
+    end
+    L1I -. miss .-> L2
+    L1D -. miss .-> L2
+    ARB -->|tensor req| L1D
+```
 
 ## Tensor Acceleration & Supported Workloads
 
