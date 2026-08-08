@@ -141,7 +141,7 @@ instruction throughput is preserved while the accelerator streams data.
 The design comprises 30 SystemVerilog source files (26 architecturally distinct modules plus
 4 supporting files). Every module is completed, synthesised and behaviourally simulated.
 Full mathematics, worked numerical examples, and per-module fix histories are documented in
-[`Docs and Reports/ARCHITECTURE.md`](Docs%20and%20Reports/ARCHITECTURE.md).
+[`Docs and Reports/Architecture.md`](Docs%20and%20Reports/Architecture.md).
 
 | Module | Function |
 |---|---|
@@ -195,7 +195,7 @@ The most impactful fixes were the PRF registered one-hot grant arbitration, the 
 pipeline split, renamer output registration with pipelined TAGE training, and registered
 CDB-to-ROB paths. The subsequent tensor-subsystem integration and L1D full-line datapath
 widening added roughly 7,300 endpoints while maintaining positive slack. The complete
-iteration log is in [`Docs and Reports/Architecture.md`](Docs%20and%20Reports/ARCHITECTURE.md).
+iteration log is in [`Docs and Reports/Architecture.md`](Docs%20and%20Reports/Architecture.md).
 
 ---
 
@@ -248,7 +248,7 @@ lotus-omni/
 
 ## Documentation
 
-The primary reference is [`Docs and Reports/Architecture.md`](Docs%20and%20Reports/ARCHITECTURE.md),
+The primary reference is [`Docs and Reports/Architecture.md`](Docs%20and%20Reports/Architecture.md),
 which documents every module with its mathematical formulation, a worked numerical example, and
 a complete fix history. Timing-closure details are in `Docs and Reports/reports/`.
 
