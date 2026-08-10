@@ -267,6 +267,6 @@ and confirmed by the author using real Vivado tool output, archived in this repo
 **Sanuka Nethmira Amarasekara**
 Lotus Omni - fabless AI-semiconductor concept
 
-- Email: ______________________
-- LinkedIn: ______________________
-- Website / Portfolio: ______________________
+- Email: nethmirasanuak@gmail.com
+- LinkedIn: www.linkedin.com/in/sanuka-nethmira-amarasekara
+- Personal Site: https://62d618c9dea9d.site123.me/ 
