@@ -2,7 +2,7 @@
 //////////////////////////////////////////////////////////////////////////////////
 // Company:       Lotus Omni (Fabless AI Semiconductor)
 // Engineer:      Sanuka Nethmira Amarasekara
-// Module Name:   lotus_branch_exec - V2.0 FIXED
+// Module Name:   lotus_branch_exec - V2.1 BRANCH-DEADLOCK FIX
 //
 // FIX HIGH-001: branch_tag_out was HARDCODED to 0
 //   OLD: assign branch_tag_out = 3'h0;   // ← Bug! All checkpoints used slot 0
@@ -13,6 +13,14 @@
 //   Top-level must connect:
 //     branch_exec_tag  → renamer's flush_branch_tag
 //     branch_flush_en  → renamer's flush_en
+//
+// 🛠️ V2.1 FIX BRANCH-DEADLOCK-01:
+//   Previously, cdb_valid was ONLY asserted for JAL/JALR.
+//   Conditional branches (BEQ, BNE, BLT, BGE, etc.) never signaled completion
+//   to the ROB, causing the pipeline to deadlock when a conditional branch
+//   reached the ROB head (it was valid but never marked as 'completed').
+//   Fix: ALL branches now assert cdb_valid=1 on resolution.
+//   Conditional branches set cdb_p_dest=0 and cdb_data=0 (no GPR writeback).
 //
 // Architecture:
 //   - RISC-V RV64I branch resolution
@@ -118,34 +126,42 @@ module lotus_branch_exec import lotus_pkg::*; (
     // =========================================================================
     // Registered outputs
     // =========================================================================
-
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            cdb_valid             <= 1'b0;
-            cdb_p_dest            <= 7'h0;
-            cdb_data              <= 64'h0;
-            branch_resolved       <= 1'b0;
+            cdb_valid               <= 1'b0;
+            cdb_p_dest              <= 7'h0;
+            cdb_data                <= 64'h0;
+            branch_resolved         <= 1'b0;
             branch_correct_pc_valid <= 1'b0;
-            branch_correct_pc     <= 64'h0;
-            branch_mispredict     <= 1'b0;
-            branch_tag_out        <= 3'h0;
-            perf_mispredict       <= 1'b0;
+            branch_correct_pc       <= 64'h0;
+            branch_mispredict       <= 1'b0;
+            branch_tag_out          <= 3'h0;
+            perf_mispredict         <= 1'b0;
         end else begin
             // Defaults
-            cdb_valid             <= 1'b0;
-            branch_resolved       <= 1'b0;
-            branch_mispredict     <= 1'b0;
+            cdb_valid               <= 1'b0;
+            branch_resolved         <= 1'b0;
+            branch_mispredict       <= 1'b0;
             branch_correct_pc_valid <= 1'b0;
-            perf_mispredict       <= 1'b0;
+            perf_mispredict         <= 1'b0;
 
             if (issue_valid) begin
                 // -------------------------------------------------------
-                // CDB: JAL/JALR write link address to dest register
+                // 🛠️ FIX BRANCH-DEADLOCK-01: ALL branches must complete!
+                // Previously, only JAL/JALR asserted cdb_valid.
+                // Conditional branches (BEQ, BNE, etc.) never completed,
+                // causing the ROB to stall forever when reaching the head.
+                // Now: ALL branches assert cdb_valid=1 to signal completion.
                 // -------------------------------------------------------
-                if (issue_opcode == OP_JAL || issue_opcode == OP_JALR) begin
-                    cdb_valid  <= 1'b1;
+                cdb_valid  <= 1'b1;
+
+                if (issue_opcode[6:0] == OP_JAL || issue_opcode[6:0] == OP_JALR) begin
                     cdb_p_dest <= issue_p_dest;
                     cdb_data   <= link_addr;   // Return address = PC+4
+                end else begin
+                    // Conditional branches do not write to a GPR
+                    cdb_p_dest <= 7'h0;
+                    cdb_data   <= 64'h0;
                 end
 
                 // -------------------------------------------------------

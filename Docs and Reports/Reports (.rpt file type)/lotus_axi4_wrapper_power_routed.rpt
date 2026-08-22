@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version     : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
-| Date             : Thu Aug  6 19:03:38 2026
+| Date             : Fri Aug 21 11:59:50 2026
 | Host             : SanukaPCs running 64-bit major release  (build 9200)
 | Command          : report_power -file lotus_axi4_wrapper_power_routed.rpt -pb lotus_axi4_wrapper_power_summary_routed.pb -rpx lotus_axi4_wrapper_power_routed.rpx
 | Design           : lotus_axi4_wrapper
@@ -30,10 +30,10 @@ Table of Contents
 ----------
 
 +--------------------------+--------------+
-| Total On-Chip Power (W)  | 0.397        |
+| Total On-Chip Power (W)  | 0.390        |
 | Design Power Budget (W)  | Unspecified* |
 | Power Budget Margin (W)  | NA           |
-| Dynamic (W)              | 0.285        |
+| Dynamic (W)              | 0.278        |
 | Device Static (W)        | 0.112        |
 | Effective TJA (C/W)      | 1.5          |
 | Max Ambient (C)          | 99.4         |
@@ -52,20 +52,19 @@ Table of Contents
 +--------------------------+-----------+----------+-----------+-----------------+
 | On-Chip                  | Power (W) | Used     | Available | Utilization (%) |
 +--------------------------+-----------+----------+-----------+-----------------+
-| Clocks                   |     0.091 |        3 |       --- |             --- |
-| Slice Logic              |     0.064 |   115443 |       --- |             --- |
-|   LUT as Logic           |     0.056 |    48946 |    133800 |           36.58 |
-|   LUT as Distributed RAM |     0.006 |     6504 |     46200 |           14.08 |
-|   Register               |    <0.001 |    38173 |    267600 |           14.26 |
-|   F7/F8 Muxes            |    <0.001 |     8326 |    133800 |            6.22 |
-|   CARRY4                 |    <0.001 |      847 |     33450 |            2.53 |
-|   BUFG                   |    <0.001 |        1 |        32 |            3.13 |
-|   Others                 |     0.000 |      281 |       --- |             --- |
-| Signals                  |     0.107 |    84338 |       --- |             --- |
+| Clocks                   |     0.095 |        3 |       --- |             --- |
+| Slice Logic              |     0.059 |   124486 |       --- |             --- |
+|   LUT as Logic           |     0.045 |    54640 |    133800 |           40.84 |
+|   LUT as Distributed RAM |     0.013 |     6906 |     46200 |           14.95 |
+|   Register               |    <0.001 |    40250 |    267600 |           15.04 |
+|   F7/F8 Muxes            |    <0.001 |     8170 |    133800 |            6.11 |
+|   CARRY4                 |    <0.001 |      855 |     33450 |            2.56 |
+|   Others                 |     0.000 |      284 |       --- |             --- |
+| Signals                  |     0.095 |    91497 |       --- |             --- |
 | Block RAM                |     0.023 |       17 |       365 |            4.66 |
-| DSPs                     |    <0.001 |       64 |       740 |            8.65 |
+| DSPs                     |     0.007 |       64 |       740 |            8.65 |
 | Static Power             |     0.112 |          |           |                 |
-| Total                    |     0.397 |          |           |                 |
+| Total                    |     0.390 |          |           |                 |
 +--------------------------+-----------+----------+-----------+-----------------+
 
 
@@ -75,7 +74,7 @@ Table of Contents
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
 | Source    | Voltage (V) | Total (A) | Dynamic (A) | Static (A) | Powerup (A) | Budget (A)  | Margin (A) |
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
-| Vccint    |       0.900 |     0.338 |       0.316 |      0.022 |       NA    | Unspecified | NA         |
+| Vccint    |       0.900 |     0.330 |       0.309 |      0.022 |       NA    | Unspecified | NA         |
 | Vccaux    |       1.800 |     0.031 |       0.000 |      0.031 |       NA    | Unspecified | NA         |
 | Vcco33    |       3.300 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
 | Vcco25    |       2.500 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
@@ -141,42 +140,41 @@ Table of Contents
 3.1 By Hierarchy
 ----------------
 
-+----------------------------------+-----------+
-| Name                             | Power (W) |
-+----------------------------------+-----------+
-| lotus_axi4_wrapper               |     0.285 |
-|   u_core                         |     0.285 |
-|     u_alu                        |     0.002 |
-|     u_decoder                    |     0.044 |
-|       gen_diq_bank[0].u_bank     |     0.003 |
-|       gen_diq_bank[10].u_bank    |     0.002 |
-|       gen_diq_bank[11].u_bank    |     0.001 |
-|       gen_diq_bank[12].u_bank    |     0.002 |
-|       gen_diq_bank[13].u_bank    |     0.002 |
-|       gen_diq_bank[14].u_bank    |     0.002 |
-|       gen_diq_bank[1].u_bank     |     0.002 |
-|       gen_diq_bank[2].u_bank     |     0.002 |
-|       gen_diq_bank[3].u_bank     |     0.001 |
-|       gen_diq_bank[4].u_bank     |     0.003 |
-|       gen_diq_bank[5].u_bank     |     0.002 |
-|       gen_diq_bank[6].u_bank     |     0.002 |
-|       gen_diq_bank[7].u_bank     |     0.001 |
-|       gen_diq_bank[8].u_bank     |     0.002 |
-|       gen_diq_bank[9].u_bank     |     0.002 |
-|     u_dram_flow_gate             |     0.004 |
-|     u_ifu                        |     0.024 |
-|     u_l1d_cache                  |     0.025 |
-|     u_l1i_cache                  |     0.011 |
-|     u_l2_cache                   |     0.039 |
-|     u_lsq                        |     0.008 |
-|     u_prf                        |     0.004 |
-|     u_renamer                    |     0.022 |
-|     u_rob                        |     0.028 |
-|     u_rs                         |     0.009 |
-|     u_tage                       |     0.036 |
-|     u_tensor_bf16                |     0.012 |
-|       row_gen[6].col_gen[7].u_pe |     0.004 |
-|     u_tensor_engine              |     0.008 |
-+----------------------------------+-----------+
++---------------------------------------+-----------+
+| Name                                  | Power (W) |
++---------------------------------------+-----------+
+| lotus_axi4_wrapper                    |     0.278 |
+|   u_core                              |     0.278 |
+|     u_alu                             |     0.003 |
+|     u_decoder                         |     0.032 |
+|       gen_diq_bank[0].u_bank          |     0.002 |
+|       gen_diq_bank[10].u_bank         |     0.001 |
+|       gen_diq_bank[12].u_bank         |     0.001 |
+|       gen_diq_bank[13].u_bank         |     0.001 |
+|       gen_diq_bank[14].u_bank         |     0.001 |
+|       gen_diq_bank[1].u_bank          |     0.002 |
+|       gen_diq_bank[2].u_bank          |     0.002 |
+|       gen_diq_bank[3].u_bank          |     0.001 |
+|       gen_diq_bank[4].u_bank          |     0.002 |
+|       gen_diq_bank[5].u_bank          |     0.001 |
+|       gen_diq_bank[6].u_bank          |     0.002 |
+|       gen_diq_bank[8].u_bank          |     0.002 |
+|       gen_diq_bank[9].u_bank          |     0.001 |
+|     u_dram_flow_gate                  |     0.004 |
+|     u_ifu                             |     0.018 |
+|     u_l1d_cache                       |     0.023 |
+|     u_l1i_cache                       |     0.010 |
+|     u_l2_cache                        |     0.039 |
+|     u_lsq                             |     0.008 |
+|     u_noc_router                      |     0.003 |
+|       gen_port_fifo[4].u_fifo_storage |     0.001 |
+|     u_prf                             |     0.004 |
+|     u_renamer                         |     0.015 |
+|     u_rob                             |     0.034 |
+|     u_rs                              |     0.016 |
+|     u_tage                            |     0.036 |
+|     u_tensor_bf16                     |     0.023 |
+|     u_tensor_engine                   |     0.005 |
++---------------------------------------+-----------+
 
 

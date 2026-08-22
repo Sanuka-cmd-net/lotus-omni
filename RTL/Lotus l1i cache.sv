@@ -2,11 +2,14 @@
 //////////////////////////////////////////////////////////////////////////////////
 // Company:       Lotus Omni (Fabless AI Semiconductor)
 // Engineer:      Sanuka Nethmira Amarasekara
-// Module Name:   lotus_l1i_cache - V4.1 SENIOR INDEX FIX
+// Module Name:   lotus_l1i_cache - V4.2 SIMULATION X-STATE FIX
 //
 // FIX APPLIED:
 //   - SYNTH-8-324: Changed array declarations from [NUM_SETS-1] to [0:NUM_SETS-1]
 //     (In SV, [511] means 1 element at index 511. [0:511] means 512 elements)
+//   - V4.2 SIMULATION FIX: Added initial block to initialize BRAM arrays
+//     to 0 at simulation start. This prevents X-state propagation in XSim
+//     while preserving proper BRAM inference for synthesis.
 //
 // Architecture: (100% PRESERVED)
 //   - 512-set direct-mapped instruction cache
@@ -227,6 +230,19 @@ module lotus_l1i_cache #(
     always_ff @(posedge clk) begin
         if (data_we)
             data_ram[data_waddr] <= data_wdata;
+    end
+
+    // =========================================================================
+    // SIMULATION INITIALIZATION (V4.2 X-STATE FIX)
+    // Fixes X-state propagation in XSim by initializing BRAMs to 0.
+    // This does NOT affect synthesis (ignored by Vivado for BRAM inference).
+    // =========================================================================
+    integer ii;
+    initial begin
+        for (ii = 0; ii < NUM_SETS; ii = ii + 1) begin
+            tag_ram[ii]  = '0;
+            data_ram[ii] = '0;
+        end
     end
 
     // =========================================================================

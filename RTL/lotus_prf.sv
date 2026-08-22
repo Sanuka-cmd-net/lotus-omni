@@ -1,10 +1,12 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-// lotus_prf - V4.1 TIMING FIX: Registered arbitration + one-hot grant
-//   - Breaks the 20-level issue->CDB->arb->queue path (WNS -7.019ns)
+// lotus_prf - V4.2 TIMING & RAW HAZARD FIX
+//   - Breaks the 20-level issue->CDB->arb->queue path
 //   - Replaces 64-bit data compare with one-hot grant vector
 //   - Fixes drop-when-draining bug + adds backpressure
 //   - Read-after-write forwarding for +1 cycle write latency
+//   - V4.2 FIX: Added same-cycle write-first bypass for incoming wr_en
+//               to eliminate PRF RAW hazards causing AGU stale reads.
 //////////////////////////////////////////////////////////////////////////////////
 module lotus_prf import lotus_pkg::*; #(
     parameter PHYS_REGS   = 128,
@@ -20,12 +22,12 @@ module lotus_prf import lotus_pkg::*; #(
     input  logic [WRITE_PORTS-1:0][63:0] wr_data,
     input  logic [WRITE_PORTS-1:0]       wr_en,
     input  logic [WRITE_PORTS-1:0][6:0]  wr_rob_idx,
-    output logic        prf_commit_valid,   // NEW: storage write commit
-    output logic [6:0]  prf_commit_addr,    // NEW
-    output logic        prf_stall           // NEW: backpressure
+    output logic        prf_commit_valid,
+    output logic [6:0]  prf_commit_addr,
+    output logic        prf_stall
 );
 
-    localparam QDEPTH = WRITE_PORTS;   // burst tolerance ඕන නම් 8 කරන්න
+    localparam QDEPTH = WRITE_PORTS;   // burst tolerance (can be increased to 8 if needed)
 
     // ---- STEP 1: same-address collision (youngest ROB wins) ----
     logic [WRITE_PORTS-1:0] wr_same_addr_selected;
@@ -45,7 +47,7 @@ module lotus_prf import lotus_pkg::*; #(
     logic [63:0] q_data  [0:QDEPTH-1];
     logic        q_valid [0:QDEPTH-1];
 
-    // ---- STEP 2: one-hot grant (64-bit compare ඉවත්) ----
+    // ---- STEP 2: one-hot grant (removed 64-bit data compare) ----
     logic [WRITE_PORTS-1:0] live_grant;
     logic                   queue_drain, chosen_valid, chosen_from_queue;
     logic [6:0]             chosen_addr;
@@ -84,7 +86,7 @@ module lotus_prf import lotus_pkg::*; #(
             wr_deferred[p] = wr_same_addr_selected[p] && !live_grant[p];
     end
 
-    // ---- STEP 2a: ⭐ REGISTER arbitration (20-level path එක මෙතනින් කැඩෙනවා) ----
+    // ---- STEP 2a: REGISTER arbitration (breaks the 20-level critical path here) ----
     logic        grant_valid_q, drain_q;
     logic [6:0]  grant_addr_q;
     logic [63:0] grant_data_q;
@@ -157,12 +159,33 @@ module lotus_prf import lotus_pkg::*; #(
             (* ram_style = "distributed" *) logic [63:0] reg_file_bank [0:PHYS_REGS-1];
             initial for (int i = 0; i < PHYS_REGS; i++) reg_file_bank[i] = 64'h0;
 
-            assign rd_data[r] = (grant_valid_q && (rd_addr[r] == grant_addr_q))
-                                ? grant_data_q
-                                : reg_file_bank[rd_addr[r]];
+            // =========================================================================
+            // V4.2 FIX: Comprehensive Read-After-Write (RAW) Bypass Network
+            // =========================================================================
+            // Resolves same-cycle RAW hazards by checking both the registered
+            // committed writes (grant_valid_q) and the incoming write requests (wr_en).
+            // This ensures reads always get the most up-to-date data, eliminating
+            // stale read deadlocks in the AGU/LSQ paths.
+            always_comb begin
+                // Default: Read from the physical register file bank
+                rd_data[r] = reg_file_bank[rd_addr[r]];
+                
+                // Priority 1: Bypass the registered committed write (from previous cycle)
+                if (grant_valid_q && (rd_addr[r] == grant_addr_q) && (grant_addr_q != 7'h0)) begin
+                    rd_data[r] = grant_data_q;
+                end
+                
+                // Priority 2: Bypass incoming same-cycle write requests
+                // Iterating through all write ports to catch any same-cycle updates
+                for (int w = 0; w < WRITE_PORTS; w++) begin
+                    if (wr_en[w] && (wr_addr[w] == rd_addr[r]) && (wr_addr[w] != 7'h0)) begin
+                        rd_data[r] = wr_data[w];  // Forward incoming write data
+                    end
+                end
+            end
 
             always_ff @(posedge clk) begin
-                if (grant_valid_q)
+                if (grant_valid_q && grant_addr_q != 7'h0)
                     reg_file_bank[grant_addr_q] <= grant_data_q;
             end
         end

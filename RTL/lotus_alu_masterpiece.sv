@@ -3,7 +3,7 @@
 // Company:       Lotus Omni (Fabless AI Semiconductor)
 // Engineer:      Sanuka Nethmira Amarasekara
 // Module Name:   lotus_alu_masterpiece
-// Description:   Tape-Out Ready 64-bit Simple ALU (Port 0) - V4.2 TIMING FIX
+// Description:   Tape-Out Ready 64-bit Simple ALU (Port 0) - V4.3 DEADLOCK FIX
 //
 // FIX ALU-LATCH-001 (preserved): word_result default assignment.
 //
@@ -14,17 +14,12 @@
 //   14.27ns (WNS -4.304ns). The forwarding/operand-select network (~8.8ns) and
 //   the 64-bit adder (~2.9ns) were all combinational in ONE cycle before the
 //   output register.
-//
 //   Fix: register the selected operands (src1/src2) + control at the ALU input.
-//     Stage 1 (comb): forwarding + operand select -> [src1_q, src2_q, ctrl_q]
-//     Stage 2 (comb): [src1_q, src2_q] -> ALU compute -> [cdb_data_out_reg]
-//   This splits the 27-level path into ~14 levels (operand mux, ~8.8ns) feeding
-//   the input register, and ~13 levels (adder + output mux, ~4ns) after it.
-//   Both fit the 10ns budget with margin.
 //
-//   NOTE: ALU latency increases 1 -> 2 cycles. This is absorbed by the OoO
-//   scheduler/ROB (dependent instructions simply wake up 1 cycle later).
-//   Flush handling preserved for both pipeline stages.
+// FIX ALU-DEADLOCK-001 (V4.3): 
+//   1. Removed p_dest_q != 0 check in CDB writeback. Instructions targeting x0 
+//      (e.g., NOPs) must return cdb_valid_out=1 so the ROB can commit them.
+//   2. Changed '!=' to '!==' in opcode checks to prevent simulation 'X' propagation.
 //////////////////////////////////////////////////////////////////////////////////
 
 module lotus_alu_masterpiece import lotus_pkg::*; #(
@@ -83,8 +78,8 @@ module lotus_alu_masterpiece import lotus_pkg::*; #(
 
     // ------------------------------------------------------------------------
     // === FIX ALU-TIMING-01: INPUT OPERAND/CONTROL REGISTER (EX1 -> EX2) ===
-    //   Breaks forwarding-mux -> adder chain. Operands + control latched here,
-    //   computation happens next cycle from these registered values.
+    //    Breaks forwarding-mux -> adder chain. Operands + control latched here,
+    //    computation happens next cycle from these registered values.
     // ------------------------------------------------------------------------
     logic [63:0] src1_q, src2_q;
     logic [63:0] imm_q, pc_q;
@@ -175,19 +170,19 @@ module lotus_alu_masterpiece import lotus_pkg::*; #(
             cdb_p_dest_out <= 7'h00;
             cdb_data_out   <= 64'h0;
         end else begin
-            if (valid_q && opcode_q != 7'b0100011 &&  
-                           opcode_q != 7'b0000011 &&  
-                           opcode_q != 7'b1101111 &&  
-                           opcode_q != 7'b1100111) begin 
-                if (p_dest_q != 7'h00) begin
-                    cdb_valid_out  <= 1'b1;
-                    cdb_p_dest_out <= p_dest_q;
-                    cdb_data_out   <= alu_result;
-                end else begin
-                    cdb_valid_out  <= 1'b0;
-                    cdb_p_dest_out <= 7'h00;
-                    cdb_data_out   <= 64'h0;
-                end
+            // FIX ALU-DEADLOCK-001 (V4.3):
+            // 1. Use !== to prevent simulation 'X' propagation from failing the condition.
+            if (valid_q && opcode_q !== 7'b0100011 &&  
+                           opcode_q !== 7'b0000011 &&  
+                           opcode_q !== 7'b1101111 &&  
+                           opcode_q !== 7'b1100111) begin 
+                
+                // 2. Removed the (p_dest_q != 7'h00) check. 
+                // Instructions writing to x0 MUST return valid so ROB can commit them.
+                cdb_valid_out  <= 1'b1;
+                cdb_p_dest_out <= p_dest_q;
+                cdb_data_out   <= alu_result;
+                
             end else begin
                 cdb_valid_out  <= 1'b0;
                 cdb_p_dest_out <= 7'h00;

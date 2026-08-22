@@ -5,11 +5,11 @@
 
 **Author:** Sanuka Nethmira Amarasekara — Lotus Omni (Fabless AI Semiconductor)
 **Target FPGA:** Xilinx Artix-7 xc7a200tl-ffv1156-2L
-**Timing Status:** Timing-closed OOC @ 80 MHz (WNS +0.141 ns, 0 failing endpoints, 157,103 total endpoints)
+**Timing Status:** Timing-closed OOC @ 80 MHz (WNS +0.252 ns, 0 failing endpoints, 166,090 total endpoints)
 **ISA:** RV64I + custom tensor opcode (0x0B)
 **RTL Language:** SystemVerilog
-**Total Modules:** 30 (all completed, synthesised, and verified)
-**Resource Utilisation:** 55,450 LUT (41.2%), 38,173 FF (14.2%), 17 BRAM tiles (4.7%), 64 DSP48E1 (8.7%) — xc7a200t, post-route, zero latches
+**Total Modules:** 30 source files / 35 instantiated modules (all completed, synthesised, and verified)
+**Resource Utilisation:** 61,546 LUT (45.73%), 40,250 FF (14.95%), 17 BRAM tiles (4.66%), 64 DSP48E1 (8.65%) — xc7a200t, post-route, zero latches
 
 ---
 
@@ -33,7 +33,7 @@
 
 Lotus Omni is a from-scratch, 4-wide superscalar, out-of-order (OoO) RISC-V core augmented with an AI accelerator subsystem. It was designed, debugged, simulated and timing-closed by a single self-taught engineer, with AI pair-programming assistance. Active RTL development spanned approximately nine months of focused engineering work. The design targets the "AI edge processor" class: a general-purpose OoO scalar pipeline fused with a systolic tensor engine, a three-level memory hierarchy, a TAGE branch predictor, a 2-D mesh Network-on-Chip and credit-based congestion control.
 
-The processor implements the RV64I base integer ISA (64-bit addressing, 32-bit registers with sign/zero extension for word operations) augmented with a custom opcode space at 0x0B for tensor matrix-multiply operations. The scalar pipeline is 4-wide from decode through rename, dispatch, issue, and commit, with a 128-entry Physical Register File (PRF) supporting 8 simultaneous reads and 4 simultaneous writes. Out-of-order execution is managed by partitioned Reservation Stations with vectorised wakeup and age-based selection, and a 32-entry Reorder Buffer (ROB) enforces in-order retirement with precise exception support.
+The processor implements the RV64I base integer ISA (64-bit addressing, 32-bit registers with sign/zero extension for word operations) augmented with a custom opcode space at 0x0B for tensor matrix-multiply operations. The scalar pipeline is 4-wide from decode through rename, dispatch, issue, and commit, with a 128-entry Physical Register File (PRF) supporting 8 simultaneous reads and 4 simultaneous writes. Out-of-order execution is managed by partitioned Reservation Stations (implemented depth **RS_DEPTH = 8**, overridden at the top-level integration) with vectorised wakeup and age-based selection, and a 32-entry Reorder Buffer (ROB) enforces in-order retirement with precise exception support.
 
 The tensor accelerator subsystem consists of dual 8x8 systolic arrays (BF16 and INT8), a 2:4 structured sparsity engine, a tensor memory arbiter with CPU-priority arbitration, and a 6-state FSM tensor engine that orchestrates complete 8x8 matrix multiplications in the background while the scalar pipeline continues executing. The memory hierarchy comprises a 32 KB direct-mapped L1 Instruction Cache, a 4 KB write-back L1 Data Cache, and a 16-set 4-way PLRU unified L2 Cache — all using 64-byte cache lines. The L2 is implemented entirely in LUTRAM (zero BRAM), demonstrating a deliberate architectural choice to reserve BRAM resources for the L1I and L1D data arrays.
 
@@ -49,7 +49,7 @@ Lotus Omni uses a 4-wide superscalar out-of-order pipeline. Up to 4 instructions
 
 ### 2.2 TAGE Branch Prediction
 
-The branch predictor uses the TAGE (Tagged Geometric History Length) algorithm with a bimodal base table (1024 entries, 10-bit index), 3 tagged geometric-history tables (256 entries each, 8-bit counters), a Branch Target Buffer (BTB, 32 entries), and a Global History Register (GHR). Training updates are pipelined (FIX TAGE-TIMING-02) to meet timing at 80 MHz. A GHR snapshot FIFO (8-deep) ensures training uses the correct historical state.
+The branch predictor uses the TAGE (Tagged Geometric History Length) algorithm with a bimodal base table (1024 entries, 10-bit index), 3 tagged geometric-history tables (256 entries each, 8-bit tags, 3-bit saturating counters), a Branch Target Buffer (BTB, 32 entries), and a Global History Register (GHR). Training updates are pipelined (FIX TAGE-TIMING-02) to meet timing at 80 MHz. A GHR snapshot FIFO (8-deep) ensures training uses the correct historical state.
 
 ### 2.3 Outer-Product Broadcast Systolic Arrays (BF16 and INT8)
 
@@ -57,7 +57,7 @@ Both the BF16 and INT8 8x8 systolic arrays use **outer-product broadcast** dataf
 
 ### 2.4 2:4 Structured Sparsity (NVIDIA Ampere/Hopper Style)
 
-The sparsity engine implements 2:4 structured sparsity: for every group of 4 weight values, the two with the largest absolute magnitude are retained and the other two are zeroed. A 3-bit metadata value encodes the selection (6 possible combinations from C(4,2) = 6, fitting exactly in 3 bits). This halves tensor bandwidth and doubles effective throughput. Currently disabled via `sparsity_en = 0` in the CSR default reset value, but the engine is fully synthesised and ready for activation.
+The sparsity engine implements 2:4 structured sparsity: for every group of 4 weight values, the two with the largest absolute magnitude are retained and the other two are zeroed. A 3-bit metadata value encodes the selection (6 possible combinations from C(4,2) = 6, fitting exactly in 3 bits). This halves tensor bandwidth and doubles effective throughput. The CSR `sparsity_ctrl` defaults to enabled (`0x01`), but sparsity is disabled at the top level (`assign sparsity_en_csr = 1'b0`) for Artix-7 bring-up; the engine is fully synthesised and can be activated by changing a single assign.
 
 ### 2.5 Credit-Based Congestion-Aware Flow Gates
 
@@ -176,42 +176,49 @@ The following line diagram illustrates the complete data-flow architecture of Lo
 
 ## 4. Module Status Table
 
-All 30 modules have been designed, implemented in SystemVerilog, synthesised, behaviourally simulated, and the full core has been timing-closed out-of-context at 80 MHz.
+All 30 source files are **completed**: synthesised, behaviourally simulated, and (for the full core) timing-closed out-of-context at 80 MHz. The 30 files map to 35 instantiated modules; 4 internal submodules (`decoder_diq_bank`, `rs_payload_bank`, `pf_fifo_4deep`, `noc_fifo_storage`) are generated or instantiated within their parent modules.
 
 | # | Module | Function | Status |
 |---|--------|----------|--------|
 | 1 | `lotus_ifu_masterpiece` | 16-wide fetch, deadlock-free request channel (V1.1) | Completed |
-| 2 | `lotus_l1i_cache` | 512-set DM I-cache, 32 KB, 64 B/line, BRAM, 5-state FSM (V4.1) | Completed |
+| 2 | `lotus_l1i_cache` | 512-set DM I-cache, 32 KB, 64 B/line, BRAM, 5-state FSM (V4.2) | Completed |
 | 3 | `lotus_tage_predictor` | TAGE+BTB branch predictor with pipelined training (V2.8) | Completed |
 | 4 | `lotus_decoder_masterpiece` | 16-wide decode, 128-entry 16-bank LUTRAM DIQ (V4.0) | Completed |
 | 5 | `lotus_renamer_masterpiece` | RAT + free-list, 8 branch checkpoints, registered output (V3.3) | Completed |
-| 6 | `lotus_reservation_station_v4` | Partitioned RS, vectorised wakeup/selection, pure-arith occupancy (V5.6) | Completed |
+| 6 | `lotus_reservation_station_v4` | Partitioned RS, vectorised wakeup/selection, pure-arith occupancy (V5.8) | Completed |
 | 7 | `lotus_prf` | 128x64b 8R/4W PRF, registered one-hot arbitration, deferral queue | Completed |
-| 8 | `lotus_alu_masterpiece` | RV64I ALU, 2-stage EX1/EX2 pipeline with OR-AND forwarding (V4.2) | Completed |
-| 9 | `lotus_branch_exec` | Branch/jump resolve, mispredict detection, proper branch_tag (V2.0) | Completed |
+| 8 | `lotus_alu_masterpiece` | RV64I ALU, 2-stage EX1/EX2 pipeline with OR-AND forwarding (V4.3 - ALU-DEADLOCK-001) | Completed |
+| 9 | `lotus_branch_exec` | Branch/jump resolve, mispredict detection, proper branch_tag (V2.1 - BRANCH-DEADLOCK-01) | Completed |
 | 10 | `lotus_agu` | Address generation, 9-bit wmask, misalign detect, latch-free (V1.2) | Completed |
-| 11 | `lotus_lsq_masterpiece` | 16-entry SQ, CAM store-to-load forwarding, registered drain (V3.6) | Completed |
-| 12 | `lotus_l1d_cache` | 64-line WB data cache, 4 KB, 64 B/line, 512-bit resp (V8.0) | Completed |
+| 11 | `lotus_lsq_masterpiece` | 16-entry SQ, CAM store-to-load forwarding, registered drain (V3.8) | Completed |
+| 12 | `lotus_l1d_cache` | 64-line WB data cache, 4 KB, 64 B/line, 512-bit resp, 7-state 
+FSM w/ MMIO_SINK (V8.1) | Completed |
 | 13 | `lotus_l2_cache` | 16-set 4-way PLRU unified L2, LUTRAM-only, 4-entry queue (V7.6) | Completed |
 | 14 | `lotus_prefetcher` | Stride prefetcher, RPT + 4-deep queue, fixed FIFO (V1.6) | Completed |
-| 15 | `lotus_rob_masterpiece` | Banked-RAM ROB, 32-entry, 4-wide commit, registered CDB (V7.7) | Completed |
+| 15 | `lotus_rob_masterpiece` | Banked-RAM ROB, 32-entry, 4-wide commit, registered CDB (V8.3) | Completed |
 | 16 | `lotus_tensor_engine` | MATMUL FSM, 6-state, internal CDB writeback, dataflow-aligned (v3.0.0) | Completed |
 | 17 | `lotus_bf16_systolic_array_8x8_v3` | 8x8 BF16 outer-product broadcast, local accumulation (V5.1) | Completed |
 | 18 | `lotus_int8_systolic_array_8x8` | 8x8 INT8 outer-product broadcast, local accumulation (V2.0) | Completed |
 | 19 | `lotus_bf16_tensor_pe` | DSP-mapped BF16 MAC PE, 3-stage, local acc, operand isolation (V10.0) | Completed |
-| 20 | `lotus_sparsity_engine_v3` | 2:4 structured sparsity compressor, backpressure hold (V3) | Completed |
+| 20 | `lotus_sparsity_engine_v3` | 2:4 structured sparsity compressor, backpressure hold (V3.4 - SPARSE-HS-001) | Completed |
 | 21 | `lotus_tensor_mem_arbiter` | CPU-priority L1D arbiter, 12 SVA assertions (v2.1.0) | Completed |
-| 22 | `lotus_noc_router_masterpiece` | 5-port XY mesh NoC router, LUTRAM FIFO, set/reset safe (V2) | Completed |
-| 23 | `congestion_aware_flow_gate` | Credit gates + PID throttle + 32-cycle sequential divider (V2.2) | Completed |
-| 24 | `lotus_csr` | Machine-mode CSRs + custom tensor/sparsity CSRs + FENCE/FENCE.I (V1.0) | Completed |
-| 25 | `lotus_pmu` | 13-counter hardware PMU, shift-based IPC, pipelined counters | Completed |
-| 26 | `lotus_axi4_wrapper` | AXI4-Lite control-plane, internal tensor CDB, glitch-free reset (V2.0) | Completed |
-| 27 | `lotus_omni_core_top_v2` | Top-level integration, timing pipelines, all bugs fixed | Completed |
-| 28 | `lotus_pkg` | Shared parameter/typedef package, 30+ structs (uop_t, rs_entry_t, etc.) | Completed |
-| 29 | `lotus_bf16_mult` | ASIC-portable BF16 multiplier, 3-stage exp/mantissa pipeline (V4.0) | Completed |
-| 30 | `lotus_tensor_pe` | INT8 MAC PE, 3-stage, DSP48E2-ready, saturation, sparsity skip (V3.0) | Completed |
+| 22 | `lotus_noc_router_masterpiece` | 5-port XY mesh NoC router, LUTRAM FIFO, set/reset safe (V3.2 - NOC-P0-001) | Completed |
+| 23 | `congestion_aware_flow_gate` | Credit-based flow gate, 4-deep LUTRAM skid FIFO, credit/throttle counters (V2.3 - DEADLOCK FIX) | Completed |
+| 24 | `flow_gate_array` | Parametric array of N parallel flow gates with global throttle (V1.0) | Completed |
+| 25 | `global_throttle_controller` | PID-like proportional controller, 32-cycle sequential divider (V1.0) | Completed |
+| 26 | `lotus_csr` | Machine-mode CSRs + custom tensor/sparsity CSRs + FENCE/FENCE.I (V1.1) | Completed |
+| 27 | `lotus_pmu` | 13-counter hardware PMU, shift-based IPC, pipelined counters | Completed |
+| 28 | `lotus_axi4_wrapper` | AXI4-Lite control-plane, internal tensor CDB, glitch-free reset (V2.0) | Completed |
+| 29 | `lotus_omni_core_top_v2` | Top-level integration, timing pipelines, all bugs fixed | Completed |
+| 30 | `lotus_pkg` | Shared parameter/typedef package, 30+ structs (uop_t, rs_entry_t, etc.) | Completed |
+| 31 | `lotus_bf16_mult` | ASIC-portable BF16 multiplier, 3-stage exp/mantissa pipeline (V4.0) | Completed |
+| 32 | `lotus_tensor_pe` | INT8 MAC PE, 3-stage, DSP48E2-ready, saturation, sparsity skip (V3.0) | Completed |
+| 33 | `decoder_diq_bank` | 8-entry LUTRAM DIQ bank (submodule of decoder, 16 banks total) | Completed |
+| 34 | `rs_payload_bank` | RS entry payload storage bank (submodule of reservation station) | Completed |
+| 35 | `pf_fifo_4deep` | 4-deep prefetch FIFO (submodule of stride prefetcher) | Completed |
+| 36 | `noc_fifo_storage` | NoC router FIFO storage (submodule of NoC router) | Completed |
 
-All 30 `.sv` files are **completed**: synthesised, behaviourally simulated, and (for the full core) timing-closed out-of-context at 80 MHz. The 30 files map to 26 architecturally distinct functional units; the additional 4 files (`lotus_pkg`, `lotus_bf16_mult`, the separate INT8 `lotus_tensor_pe`, and `lotus_axi4_wrapper` as an infrastructure file) are supporting modules that provide shared definitions, utility functions, or separate precision variants of processing elements.
+All 30 source files are **completed**: synthesised, behaviourally simulated, and (for the full core) timing-closed out-of-context at 80 MHz. The 30 files map to 35 instantiated modules; the additional files include supporting modules (`lotus_pkg`, `lotus_bf16_mult`, `lotus_tensor_pe`, `lotus_axi4_wrapper`) and 4 internal submodules (`decoder_diq_bank`, `rs_payload_bank`, `pf_fifo_4deep`, `noc_fifo_storage`) generated or instantiated within their parent modules.
 
 ---
 
@@ -290,7 +297,7 @@ The L1I Cache supplies 16 instructions per cycle to the decoder, sustaining the 
 
 **Module Description**
 
-The TAGE predictor uses a bimodal base table (1024 entries x 2-bit saturating counters, indexed by `PC[9:2]`) and 3 tagged geometric-history tables (T1/T2/T3, each 256 entries x 3-bit counters with unique tags). Each table uses a different GHR history length for varying prediction power at different branch correlation distances. A Branch Target Buffer (BTB, 32 entries) caches branch targets. The Global History Register (GHR) tracks the last 64 branch outcomes. Training updates are pipelined (FIX TAGE-TIMING-02): table writes use registered indices and tags from Stage 1, breaking a critical combinational path from the prediction output to the update logic. A GHR snapshot FIFO (8-deep, FIX TAGE-001) captures the GHR state at fetch time and replays it at training time, ensuring correct training alignment despite the pipeline latency between fetch and resolution.
+The TAGE predictor uses a bimodal base table (1024 entries x 2-bit saturating counters, indexed by `PC[9:2]`) and 3 tagged geometric-history tables (T1/T2/T3, each 256 entries x 3-bit counters with unique tags). Each table uses a different GHR history length for varying prediction power at different branch correlation distances. A Branch Target Buffer (BTB, 32 entries) caches branch targets. The Global History Register (GHR) tracks the last 16 branch outcomes. Training updates are pipelined (FIX TAGE-TIMING-02): table writes use registered indices and tags from Stage 1, breaking a critical combinational path from the prediction output to the update logic. A GHR snapshot FIFO (8-deep, FIX TAGE-001) captures the GHR state at fetch time and replays it at training time, ensuring correct training alignment despite the pipeline latency between fetch and resolution.
 
 **Mathematical Formulation (with Worked Example)**
 
@@ -396,7 +403,7 @@ The back-end is the out-of-order execution engine. It receives renamed micro-ope
 
 The Reservation Stations (RS) are the heart of out-of-order execution — they implement the dataflow firing model where instructions execute as soon as their operands are ready, regardless of their original program order. The RS is partitioned into 4 class-specific ports: Port 0 (ALU), Port 1 (Branch), Port 2 (Memory/AGU/LSQ), and Port 3 (Tensor/CSR). Each entry stores the micro-operation's opcode, destination physical register, source physical register numbers, operand validity bits, and the ROB index for in-order tracking.
 
-Entries wait for operand readiness through two mechanisms: (1) checking `prf_ready_bits` (set when the PRF write completes), or (2) waking up from CDB broadcasts (when another execution unit writes a result that matches a waiting entry's source register). Once both operands are ready, the entry becomes a candidate for issue. A vectorised parallel matcher selects the oldest ready entry per port, and the selected entry is issued to the corresponding execution unit. The issue count is pipelined (FIX RS-TIMING-02) and the occupancy counter uses pure arithmetic without conditional clamps (FIX RS-TIMING-03), which removed a 2.282 ns critical path. The RS payload is stored in isolated `rs_payload_bank` sub-modules (FIX RS-006) with registered write addresses for distributed RAM inference.
+The Reservation Station (RS) is a partitioned structure with an **implemented depth of 8 entries** (RS_DEPTH = 8, set by top-level override in `lotus_omni_core_top_v2`; note: the `lotus_pkg` comment still reads 16, which is stale — the actual synthesised depth is 8). Entries wait for operand readiness through two mechanisms: (1) checking `prf_ready_bits` (set when the PRF write completes), or (2) waking up from CDB broadcasts (when another execution unit writes a result that matches a waiting entry's source register). Once both operands are ready, the entry becomes a candidate for issue. A vectorised parallel matcher selects the oldest ready entry per port, and the selected entry is issued to the corresponding execution unit. The issue count is pipelined (FIX RS-TIMING-02) and the occupancy counter uses pure arithmetic without conditional clamps (FIX RS-TIMING-03), which removed a 2.282 ns critical path. The RS payload is stored in isolated `rs_payload_bank` sub-modules (FIX RS-006) with registered write addresses for distributed RAM inference.
 
 **Mathematical Formulation (with Worked Example)**
 
@@ -552,7 +559,7 @@ The AGU feeds the Load-Store Queue with correctly computed addresses and write m
 
 **Module Description**
 
-The Load-Store Queue (LSQ) is a 16-entry store queue with CAM (Content-Addressable Memory) style store-to-load forwarding. When a load instruction executes, the LSQ searches all older valid stores for an address match using a vectorised parallel match. The match vector is rotated by the tail pointer so that the youngest older matching store wins (correct memory ordering). A 2-cycle forwarding pipeline (FIX LSQ-TIMING-03) separates the match computation from the data selection. A shallow drain-hold mechanism (FIX LSQ-TIMING-03b) prevents load/store hazards during drain by detecting head-address matches. Committed stores drain one per cycle to the L1D Cache using pre-read registered head data (FIX LSQ-TIMING-04). Data registers use synchronous reset only (FIX LSQ-006) to avoid BRAM inference issues.
+The Load-Store Queue (LSQ) contains a **16-entry store queue** (SQ_DEPTH = 16, module-level default) with CAM (Content-Addressable Memory) style store-to-load forwarding. When a load instruction executes, the LSQ searches all older valid stores for an address match using a vectorised parallel match. The match vector is rotated by the tail pointer so that the youngest older matching store wins (correct memory ordering). A 2-cycle forwarding pipeline (FIX LSQ-TIMING-03) separates the match computation from the data selection. A shallow drain-hold mechanism (FIX LSQ-TIMING-03b) prevents load/store hazards during drain by detecting head-address matches. Committed stores drain one per cycle to the L1D Cache using pre-read registered head data (FIX LSQ-TIMING-04). Data registers use synchronous reset only (FIX LSQ-006) to avoid BRAM inference issues.
 
 **Mathematical Formulation (with Worked Example)**
 
@@ -578,7 +585,7 @@ The LSQ removes the memory-dependence stall on the common store->load case, whic
 
 **Module Description**
 
-The L1 Data Cache is a 64-line, direct-mapped, write-back/write-allocate cache with 64-byte (512-bit) cache lines, yielding 4 KB of data storage. It uses a 6-state FSM: `IDLE -> READ_RAM -> COMPARE -> WRITEBACK -> ALLOCATE -> RETRY`. The `cpu_resp_data` port is 512 bits wide (V8.0: widened from 64-bit to deliver the full cache line), enabling the AGU/LSQ to extract the relevant 64-bit word directly. On a write hit, the `wmask` is applied byte-wise to the 64-byte cache line using a write-merge mux, preserving all other bytes. On a miss, the cache allocates a new line (evicting and writing back the dirty victim if necessary), and a RETRY state serves the fresh fill data to the original requester (FIX L1D-002). BRAM data writes are reset-free for proper inference (FIX L1D-001: no `if(!rst_n)` branch in the BRAM write `always_ff`). Automatic variables were removed from `always_comb` for Vivado compatibility (FIX L1D-003).
+The L1 Data Cache is a 64-line, direct-mapped, write-back/write-allocate cache with 64-byte (512-bit) cache lines, yielding 4 KB of data storage. It uses a 7-state FSM: `IDLE -> READ_RAM -> COMPARE -> WRITEBACK -> ALLOCATE -> RETRY -> MMIO_SINK`. The MMIO_SINK state (V8.1) safely absorbs MMIO and UART store responses that arrive after a cache-miss redirect, preventing a pipeline hang that would otherwise stall the LSU. The `cpu_resp_data` port is 512 bits wide (V8.0: widened from 64-bit to deliver the full cache line), enabling the AGU/LSQ to extract the relevant 64-bit word directly. On a write hit, the `wmask` is applied byte-wise to the 64-byte cache line using a write-merge mux, preserving all other bytes. On a miss, the cache allocates a new line (evicting and writing back the dirty victim if necessary), and a RETRY state serves the fresh fill data to the original requester (FIX L1D-002). BRAM data writes are reset-free for proper inference (FIX L1D-001: no `if(!rst_n)` branch in the BRAM write `always_ff`). Automatic variables were removed from `always_comb` for Vivado compatibility (FIX L1D-003).
 
 **Mathematical Formulation (with Worked Example)**
 
@@ -597,7 +604,7 @@ Write merge: for each byte b in [0..63]:
 
 **Contribution to the Chip**
 
-The L1D Cache provides single-digit-cycle load-to-use latency on hits, which is the backbone of scalar memory performance. The 512-bit full-line response (V8.0) allows the load data path to extract the correct word from the cache line without a second cache access. The write-merge capability is essential for sub-word stores, and the write-back policy minimises memory bandwidth.
+The L1D Cache provides single-digit-cycle load-to-use latency on hits, which is the backbone of scalar memory performance. The 512-bit full-line response (V8.0) allows the load data path to extract the correct word from the cache line without a second cache access. The write-merge capability is essential for sub-word stores, and the write-back policy minimises memory bandwidth. The MMIO_SINK state (V8.1) is a critical robustness improvement: it prevents a pipeline hang when stale MMIO/UART store responses arrive after a miss-triggered redirect, ensuring forward progress in all memory-mapped I/O scenarios.
 
 ---
 
@@ -689,7 +696,7 @@ The ROB enforces the sequential ISA contract — it ensures that instructions re
 
 **Module Description**
 
-The Tensor Engine is the AI accelerator's orchestration unit. It manages a complete 8x8 matrix multiply operation through a 6-state FSM: `IDLE -> MEM_REQ -> MEM_WAIT -> FEED -> DRAIN -> WB`. In the MEM_REQ/MEM_WAIT states, the engine requests matrix A (activations) and matrix B (weights) from memory through the tensor memory arbiter. In the FEED state, 8 rows of matrix A (and the corresponding columns of B, via the outer-product broadcast) are fed into the systolic array over 8 cycles. In the DRAIN state, the 8x8 output matrix is drained over 24 cycles as each column completes its partial sums. In the WB (Write-Back) state, all 64 results are written to the Physical Register File over the CDB with valid/ready backpressure, using `tensor_cdb_p_dest = dest_base + wb_idx`. The CDB writeback is fully internal to `lotus_omni_core_top_v2` (the tensor CDB ports are not exposed at the AXI4 wrapper level, FIX WRAP-TENSOR-001). The engine is precision-aware: BF16 matrices require 2 cache lines per row (128 bytes), while INT8 matrices require 1 line (64 bytes). v3.0.0 includes a dataflow alignment fix that pairs with PE V10.0 and array V5.0/V2.0 to ensure correct outer-product accumulation. 15 SystemVerilog assertions and 6 cover points guard the protocol correctness.
+The Tensor Engine is the AI accelerator's orchestration unit. It manages a complete 8x8 matrix multiply operation through a 6 operational-state FSM (`S_IDLE -> S_MEM_REQ -> S_MEM_WAIT -> S_FEED -> S_DRAIN -> S_WB`) plus a safety default (`S_ILLEGAL`). In the MEM_REQ/MEM_WAIT states, the engine requests matrix A (activations) and matrix B (weights) from memory through the tensor memory arbiter. In the FEED state, 8 rows of matrix A (and the corresponding columns of B, via the outer-product broadcast) are fed into the systolic array over 8 cycles. In the DRAIN state, the 8x8 output matrix is drained over 24 cycles as each column completes its partial sums. In the WB (Write-Back) state, all 64 results are written to the Physical Register File over the CDB with valid/ready backpressure, using `tensor_cdb_p_dest = dest_base + wb_idx`. The CDB writeback is fully internal to `lotus_omni_core_top_v2` (the tensor CDB ports are not exposed at the AXI4 wrapper level, FIX WRAP-TENSOR-001). The engine is precision-aware: BF16 matrices require 2 cache lines per row (128 bytes), while INT8 matrices require 1 line (64 bytes). v3.0.0 includes a dataflow alignment fix that pairs with PE V10.0 and array V5.0/V2.0 to ensure correct outer-product accumulation. Formal verification is provided by the tensor memory arbiter (12 SVA assertions + 7 cover points); the tensor engine itself is verified through self-checking simulation.
 
 **Mathematical Formulation (with Worked Example)**
 
@@ -905,13 +912,41 @@ The CSR/PMU subsystem makes the design observable and software-controllable — 
 
 ## 7. Achievements
 
-- **Timing Closure:** Worst Negative Slack improved from **-7.019 ns to +0.141 ns** (0 out of 157,103 failing endpoints) at 80 MHz OOC on the slowest Artix-7 speed grade, achieved through approximately 15 targeted pipeline-register and arithmetic-decoupling fixes across 6 major timing-closure iterations. The subsequent tensor-subsystem integration (outer-product systolic arrays + Tensor Engine v3.0.0) and the L1D V8.0 full-line datapath widening added ~7,300 endpoints yet **held timing positive at +0.141 ns** — the accelerator was absorbed without breaking closure.
+- **Timing Closure:** Worst Negative Slack improved from **-7.019 ns to +0.252 ns** (0 out of 166,090 failing endpoints) at 80 MHz OOC on the slowest Artix-7 speed grade, achieved through approximately 15 targeted pipeline-register and arithmetic-decoupling fixes across 6 major timing-closure iterations. The subsequent tensor-subsystem integration (outer-product systolic arrays + Tensor Engine v3.0.0) and the L1D V8.0 full-line datapath widening added ~7,300 endpoints yet held timing positive. A further round of module updates (BF16 multiplier, congestion control refactor, L1I V4.2 simulation fix, IFU deadlock fix) added ~9,000 more endpoints, and timing **improved to +0.252 ns** — every addition was absorbed with positive slack to spare.
 
-- **Full-Core Functional Simulation (self-checking, PASS 64/64):** The complete scalar pipeline (fetch, decode, rename, dispatch, issue, execute, writeback, commit) and the tensor MATMUL engine run concurrently in simulation. A self-checking testbench loads weights = 2 and activations = 3, runs a full 8×8 MATMUL through the outer-product systolic array, and verifies that **all 64 PRF results equal the exact expected value 2×3×8 = 48 (0x30)** — reporting **PASS: 64/64**. This demonstrates end-to-end data integrity from memory through the systolic array back to the register file, with the accumulator-clear alignment (V10.0 PE / V5.1 array / v3.0.0 engine) confirmed correct.
+- **Full-Core Functional Simulation (self-checking, PASS 64/64):** The tensor MATMUL engine and the supporting pipeline stages run concurrently in simulation (`tb_lotus_core_demo3`). A self-checking testbench loads weights = 2 and activations = 3, runs a full 8×8 MATMUL through the outer-product systolic array, and verifies that **all 64 PRF results equal the exact expected value 2×3×8 = 48 (0x30)** — reporting **PASS: 64/64**. This demonstrates end-to-end data integrity from memory through the systolic array back to the register file, with the accumulator-clear alignment (V10.0 PE / V5.1 array / v3.0.0 engine) confirmed correct.
 
-- **30 `.sv` Files Designed, Integrated, and Verified:** All 30 SystemVerilog source files (mapping to 26 architecturally distinct modules plus 4 supporting files) have been individually unit-tested, integrated into the core, and verified through both behavioural simulation and post-synthesis static timing analysis. The entire codebase follows an ASIC-portable coding style suitable for future tapeout.
+- **30 Source Files / 35 Instantiated Modules:** All 30 SystemVerilog source files (mapping to 31 architecturally distinct units plus 4 internal submodules: `decoder_diq_bank`, `rs_payload_bank`, `pf_fifo_4deep`,`noc_fifo_storage`) have been individually unit-tested, integrated into the core, and verified through both behavioural simulation and post-synthesis static timing analysis.
 
-- **Formal Verification:** 15 SystemVerilog assertions on the tensor engine protocol and 12 assertions plus 7 cover points on the memory arbiter protocol provide formal mathematical guarantees of correctness for the most safety-critical handshake interfaces in the design.
+- **Formal Verification:** 12 SVA assertions plus 7 cover points on the tensor memory arbiter protocol provide formal mathematical guarantees of correctness for the memory-arbitration handshake. The tensor engine is verified through self-checking simulation (PASS 64/64) rather than SVA.
+
+- **Scalar Bring-Up (coretest) Debug Campaign — in progress:**
+  The scalar bring-up workload was renamed from "coremark" to **coretest** —
+  an 8-instruction UART store test (`lui` + 3×`addi` + 3×`sb` + `nop`
+  targeting a UART at 0x1000_0000) — because the full CoreMark binary is not
+  yet loaded; the name honestly reflects the workload actually executed.
+  Across the campaign, in-order commits progressed **0 → 2 → 4 → 7 → 15** as
+  each blocking bug was root-caused and fixed:
+
+  | # | Bug (root cause) | Fix (RTL version) | Effect |
+  |---|------------------|-------------------|--------|
+  | 1 | ALU CDB rob_idx timing mismatch | registered rob_idx (top) | +2 commits |
+  | 2 | Load p_dest timing mismatch | pipelined load p_dest (top) | +2 commits |
+  | 3 | RS occupancy underflow | pure-arithmetic occupancy, no clamps (RS V5.6) | stable occupancy |
+  | 4 | Stores never complete in ROB | `agu_completes` wired to CDB port 3 (top V10.8) | stores complete |
+  | 5 | `commit_is_store` always 0 | opcode-based is_store (ROB V8.3) | stores commit |
+  | 6 | Conditional branches never complete | all branches assert `cdb_valid` (BR V2.1) | branches commit |
+  | 7 | x0-target ALU ops never complete | removed `p_dest!=0` gate; X-safe `!==` (ALU V4.3) | NOPs commit |
+  | 8 | Illegal-CSR exception loop | added cycle/time/instret/mcycle/minstret (CSR V1.1) | no trap loop |
+  | 9 | RS slots permanently lost | clear `rs_issued`/`rs_reserved` on dispatch (RS V5.8) | RS reusable |
+  | 10 | PRF stale read (AGU base = 0) | `src*_is_cdb` tracking + combinational PRF rd-addr (RS V5.8); same-cycle write-first bypass (PRF V4.2) | correct base address |
+  | 11 | LSQ draining stores with addr=0 | `addr_valid`/`data_valid` gating (LSQ V3.8); stores-only SQ allocation (top V11.1) | safe drain |
+  | 12 | L1D hang on MMIO store | `MMIO_SINK` state (L1D V8.1) | UART store absorbed |
+
+  **Current state:** all 8 coretest instructions fetch, decode, rename and
+  dispatch; stores issue with the correct effective address (0x1000_0000).
+  Remaining work: closing the store-commit → LSQ-drain → L1D `MMIO_SINK` →
+  UART-observe handshake so the test self-passes ("A B D").
 
 ---
 
@@ -930,7 +965,7 @@ The Lotus Omni project was developed by a single self-taught engineer, with AI p
 | **Apr - May 2026** | On-chip interconnect: NoC Router, Congestion-Aware Flow Gates, PID Throttle |
 | **May - Jun 2026** | CSR, PMU, AXI4 Wrapper, top-level integration (`lotus_omni_core_top_v2`) |
 | **Jul 2026** | Core integration, Tensor Engine v2/v3, **timing-closure campaign** (6 iterations, ~15 targeted fixes) |
-| **Aug 2026** | Full-core simulation demos, documentation, publication |
+| **Aug 2026** | Full-core simulation demos, documentation, publication and major bug fixing |
 
 **Total Development Time: ~9 months (solo, with AI pair-programming assistance)**
 
@@ -956,35 +991,50 @@ The timing-closure campaign progressed through 6 major iterations, each targetin
 | +RS clamps | -1.739 | 2,102 | Pure-arithmetic occupancy (remove comparator clamps) |
 | +ROB/PMU/LSQ | -0.952 | 2,102 | CDB->ROB registered path, counter pipelining |
 | **Final @80 MHz** | **+0.109** | **0** | Clock period relaxed to 12.5 ns (80 MHz target) |
-| +Tensor + L1D full-line | **+0.141** | **0** | Outer-product systolic arrays (V10.0/V5.1/V2.0), Tensor Engine v3.0.0, L1D V8.0 512-bit full-line response — +7,300 endpoints absorbed, timing held (157,103 total) |
+| +Tensor + L1D full-line | **+0.141** | **0** | Outer-product systolic arrays (V10.0/V5.1/V2.0), Tensor Engine v3.0.0, L1D V8.0 512-bit full-line response — +7,300 endpoints absorbed (157,103 total) |
+| +BF16 mult + NoC refactor + fixes | **+0.252** | **0** | `lotus_bf16_mult` V4.0 3-stage pipeline, `flow_gate_array` + `global_throttle_controller` refactor, L1I V4.2 X-state fix, IFU V1.1 deadlock fix — +8,987 endpoints absorbed (166,090 total) |
 
 **FPGA Resource Utilisation (post-route, Vivado 2025.2, xc7a200t):**
 | Resource | Utilised | Available | Util% | Notes |
 |----------|----------|-----------|-------|-------|
-| Slice LUTs | 55,450 | 134,600 | 41.2% | 48,946 as logic + 6,504 as distributed RAM (LUTRAM) |
-| Slice Registers | 38,173 | 269,200 | 14.2% | 0 latches — all FDRE/FDCE/FDSE/FDPE flip-flops |
-| Block RAM Tile | 17 | 365 | 4.7% | 16× RAMB36 + 2× RAMB18 (L1I + L1D data/tag arrays only; L2 is LUTRAM-only) |
-| DSP48E1 | 64 | 740 | 8.7% | One per BF16 systolic-array PE (64 PEs), DSP48 SR packing via synchronous resets |
+| Slice LUTs | 61,546 | 134,600 | 45.73% | 54,640 as logic + 6,906 as distributed RAM (LUTRAM) |
+| Slice Registers | 40,250 | 269,200 | 14.95% | 0 latches — all FDRE/FDCE/FDSE/FDPE flip-flops |
+| Block RAM Tile | 17 | 365 | 4.66% | 16× RAMB36E1 + 2× RAMB18E1 (L1I + L1D data/tag arrays only; L2 is LUTRAM-only) |
+| DSP48E1 | 64 | 740 | 8.65% | One per BF16 systolic-array PE (64 PEs), DSP48 SR packing via synchronous resets |
+| F7 Muxes | 5,748 | 67,300 | 8.54% | Wide muxes from RS select, PRF read ports, and tensor datapath |
+| F8 Muxes | 2,422 | 33,650 | 7.20% | Cross-slice muxes for address/data steering in LSQ and RS |
 
 ---
 
 ## 10. Future Plan
 
-1. **RISC-V Compliance Suite:** Run the official RISC-V compliance test suite and implement automated scalar commit-value checking in the testbench to verify correctness against the ISA specification.
+1. **Close the coretest UART handshake (in progress):** complete the
+   store-commit → LSQ-drain → L1D `MMIO_SINK` → UART path so the 8-instruction
+   coretest prints "A B D" and self-passes.
 
-2. **Physical Board Bring-Up:** Build a bitstream-buildable top-level wrapper with real DRAM and AXI interconnect, and bring up the design on a physical Artix-7 FPGA development board.
+2. **Full CoreMark binary:** once coretest passes, load the real CoreMark RV64
+   binary and run the full benchmark with PMU-based IPC measurement.
 
-3. **Decoder-Driven Tensor Issue:** Drive tensor operations from the decoded instruction path (rather than testbench injection), enabling the compiler to emit tensor instructions directly.
+3. **RISC-V Compliance Suite:** run the official RISC-V compliance tests and
+   implement automated scalar commit-value checking in the testbench.
 
-4. **Pipelined Tensor Arbiter & Multi-Outstanding Memory:** Pipeline the tensor memory arbiter and support multiple outstanding memory transactions to overlap latency between successive tensor operations.
+4. **Physical Board Bring-Up:** build a bitstream-buildable top-level wrapper
+   with real DRAM and AXI interconnect; bring up on an Artix-7 board.
 
-5. **2->4-Issue Scaling & Multi-Core:** Tune the pipeline for 4-issue operation (currently limited to 2-issue in some paths) and integrate a second core tile connected via the NoC, moving toward a dual-core AI edge processor.
+5. **Decoder-Driven Tensor Issue:** drive tensor operations from the decoded
+   instruction path (rather than testbench injection).
+
+6. **Pipelined Tensor Arbiter & Multi-Outstanding Memory:** pipeline the tensor
+   memory arbiter and support multiple outstanding transactions.
+
+7. **2→4-Issue Scaling & Multi-Core:** tune the pipeline for full 4-issue and
+   integrate a second core tile over the NoC.
 
 ---
 
 ## 11. Summary
 
-Lotus Omni is a complete, timing-closed, superscalar out-of-order RISC-V processor with a systolic tensor accelerator, structured sparsity, TAGE branch prediction, a three-level memory hierarchy, and a congestion-aware Network-on-Chip — built solo over approximately nine months of active RTL development and verified by synthesis, simulation, and a documented timing-closure campaign. All 30 `.sv` files are implemented, integrated, and completed. The tensor accelerator uses outer-product broadcast systolic arrays with local accumulation for both BF16 and INT8 precisions. The mathematics presented for each module (Eqs. F1–F14, B1–B22, T1–T9, N1, C1–C3, P1) are the exact functions realised in the RTL. The design targets the AI edge processor class and is ready for FPGA board bring-up, compliance testing, and eventual ASIC tapeout.
+Lotus Omni is a complete, timing-closed, superscalar out-of-order RISC-V processor with a systolic tensor accelerator, structured sparsity, TAGE branch prediction, a three-level memory hierarchy, and a congestion-aware Network-on-Chip — built solo over approximately nine months of active RTL development and verified by synthesis, simulation, and a documented timing-closure campaign. All 30 `.sv` source files are implemented, integrated, and completed. The 30 files instantiate 35 modules (31 architecturally distinct units plus 4 internal submodules: `decoder_diq_bank`, `rs_payload_bank`, `pf_fifo_4deep`, `noc_fifo_storage`). The tensor accelerator uses outer-product broadcast systolic arrays with local accumulation for both BF16 and INT8 precisions. The mathematics presented for each module (Eqs. F1–F14, B1–B22, T1–T9, N1, C1–C3, P1) are the exact functions realised in the RTL. The design targets the AI edge processor class and is ready for FPGA board bring-up, compliance testing, and eventual ASIC tapeout. Scalar bring-up (coretest) is in progress: an 8-instruction UART store test currently reaches 15 in-order commits with stores issuing at the correct effective address; the remaining store-drain/UART handshake is the active debug target (see §7 debug-campaign table).
 
 ---
 

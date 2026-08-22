@@ -1,13 +1,12 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-// lotus_l1d_cache - V8.0 FULL-LINE RESPONSE
+// lotus_l1d_cache - V8.1 MMIO BYPASS FIX
 //
-// FIX L1D-004 (THIS VERSION): cpu_resp_data widened from 64-bit word to
-//   512-bit FULL cache line. The tensor engine streams 512-bit lines, but the
-//   old 64-bit word-select returned only one 64-bit word, corrupting tensor
-//   data (every-other-element zeros). The scalar core top now selects its
-//   64-bit word by address offset (see lotus_omni_core_top_v2 load path).
+// FIX L1D-005 (THIS VERSION): Added MMIO_SINK state to trap MMIO addresses
+//   (e.g., 0x10000000 - 0x1FFFFFFF). Prevents cache from sending MMIO requests
+//   to DRAM and hanging the pipeline forever. Instantly completes the request.
 //
+// FIX L1D-004: cpu_resp_data widened from 64-bit word to 512-bit FULL cache line.
 // FIX L1D-001: Removed if(!rst_n) from BRAM write always_ff - preserves BRAM inference
 // FIX L1D-002: RETRY serves fill_data_q (new line) not stale evicted data
 // FIX L1D-003: Removed automatic variable from always_comb - Vivado incompatible
@@ -59,13 +58,15 @@ module lotus_l1d_cache #(
         logic [OFFSET_BITS-1:0] offset;
     } cache_addr_t;
 
+    // 🛠️ V8.1 FIX: Added MMIO_SINK state
     typedef enum logic [2:0] {
         IDLE      = 3'b000,
         READ_RAM  = 3'b001,
         COMPARE   = 3'b010,
         WRITEBACK = 3'b011,
         ALLOCATE  = 3'b100,
-        RETRY     = 3'b101
+        RETRY     = 3'b101,
+        MMIO_SINK = 3'b110   // 🛠️ NEW: Trap MMIO addresses
     } cache_state_t;
 
     // =========================================================================
@@ -169,6 +170,14 @@ module lotus_l1d_cache #(
                         data_q           <= cpu_req_data;
                         wmask_q          <= cpu_req_wmask;
                         write_dirty_data <= 1'b0;
+                        
+                        // 🛠️ MMIO BYPASS FIX: Trap UART/MMIO addresses (e.g., 0x10000000 - 0x1FFFFFFF)
+                        // Prevents cache from sending MMIO requests to DRAM and hanging forever
+                        if (cpu_req_addr[31:28] == 4'h1) begin
+                            state <= MMIO_SINK;
+                        end else begin
+                            state <= READ_RAM;
+                        end
                     end
                 end
 
@@ -190,7 +199,11 @@ module lotus_l1d_cache #(
                 default: write_dirty_data <= 1'b0;
             endcase
 
-            state <= next_state;
+            // Note: state <= next_state is overridden by explicit state assignments in IDLE above
+            // For other states, it correctly transitions via next_state
+            if (state != IDLE) begin
+                state <= next_state;
+            end
         end
     end
 
@@ -275,7 +288,7 @@ module lotus_l1d_cache #(
     always_comb begin
         next_state = state;
         case (state)
-            IDLE:      if (cpu_req_valid)         next_state = READ_RAM;
+            IDLE:      if (cpu_req_valid)         next_state = READ_RAM; // (Note: handled inside sequential block now, but keep comb safe)
             READ_RAM:                              next_state = COMPARE;
             COMPARE: begin
                 if (is_hit)                        next_state = IDLE;
@@ -285,29 +298,32 @@ module lotus_l1d_cache #(
             WRITEBACK: if (mem_req_ready)          next_state = ALLOCATE;
             ALLOCATE:  if (mem_resp_valid)          next_state = RETRY;
             RETRY:                                  next_state = IDLE;
+            MMIO_SINK:                              next_state = IDLE; // 🛠️ Instantly complete MMIO
             default:                                next_state = IDLE;
         endcase
     end
 
     // =========================================================================
     // OUTPUT COMBINATIONAL LOGIC
-    // V8.0: cpu_resp_data returns the FULL 512-bit line. The scalar core top
-    //       selects its 64-bit word by address offset; the tensor engine uses
-    //       the whole line.
+    // V8.1: MMIO Bypass added. cpu_resp_data returns the FULL 512-bit line.
     // =========================================================================
     always_comb begin
         cpu_req_ready  = (state == IDLE);
-        cpu_resp_valid = (state == COMPARE && is_hit) || (state == RETRY);
+        // 🛠️ Add MMIO_SINK to valid response conditions
+        cpu_resp_valid = (state == COMPARE && is_hit) || (state == RETRY) || (state == MMIO_SINK);
         cpu_resp_hit   = cpu_resp_valid;
-
-        resp_line     = (state == RETRY) ? fill_data_q : data_read_out;
-        cpu_resp_data = resp_line;   // V8.0: full 512-bit line
-
+        
+        // Return 0 for MMIO reads, otherwise normal cache line
+        resp_line     = (state == RETRY) ? fill_data_q : 
+                        (state == MMIO_SINK) ? {LINE_SIZE{1'b0}} : 
+                        data_read_out;
+                        
+        cpu_resp_data = resp_line;   
         mem_req_valid = (state == WRITEBACK) || (state == ALLOCATE);
         mem_req_rw    = (state == WRITEBACK);
-        mem_req_addr  = (state == WRITEBACK)
-                        ? {writeback_tag, addr_q.index, ZERO_OFFSET}
-                        : {addr_q.tag,    addr_q.index, ZERO_OFFSET};
+        mem_req_addr  = (state == WRITEBACK) 
+                      ? {writeback_tag, addr_q.index, ZERO_OFFSET}
+                      : {addr_q.tag,    addr_q.index, ZERO_OFFSET};
         mem_req_data  = (state == WRITEBACK) ? writeback_data : data_read_out;
     end
 

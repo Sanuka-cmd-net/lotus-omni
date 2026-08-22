@@ -1,43 +1,51 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////
-// lotus_reservation_station_v4 - V5.6 TIMING FIX (CLAMPS REMOVED)
+// lotus_reservation_station_v4 - V5.8 CRITICAL DEADLOCK & PRF ALIGNMENT FIX
 // Engineer:      Sanuka Nethmira Amarasekara (Lotus Omni)
 // Target:        Xilinx Artix-7 xc7a200t
 //
-// FIX RS-TIMING-02 (V5.5): Pipeline issue_count -> issue_count_q.
-// FIX RS-TIMING-03 (V5.6): REMOVE all conditional clamps from n_occupancy.
-//   Vivado maps "else 7'h0" and "> RS_DEPTH" clamps to the FDRE R pin,
-//   recreating the deep path (15 levels, -2.282ns). Pure arithmetic only.
-//   RS_DEPTH=8, occupancy max=12, 7-bit range=127 -> no overflow possible.
-//   issue_count_q <= occupancy+dispatch_count by construction -> no underflow.
+// FIX RS-DEADLOCK-02 (V5.8): Clear n_rs_issued and n_rs_reserved on dispatch.
+//   Previously, once a slot was issued, rs_issued[slot] was set to 1 but never
+//   cleared when a new instruction was dispatched into that slot. This caused
+//   the RS to permanently lose slots, leading to a full RS and pipeline deadlock.
 //
-// Previous fixes preserved: V5.4 PRF read pipeline, RS-TIMING-01 vectorized
-// selection, RS-004 registered write addr, RS-006 isolated banks.
+// FIX RS-PRF-ALIGN-01 (V5.8): Track CDB vs PRF source and combinationally 
+//   drive PRF read addresses.
+//   Previously, PRF reads were pipelined but the data wasn't correctly muxed 
+//   with CDB forwarded data, causing sources to read as 0x0 (especially for 
+//   Store base addresses). Now, src1_is_cdb/src2_is_cdb track the data source,
+//   and prf_rd_addr is driven combinationally from n_issue_uop to perfectly 
+//   align LUTRAM read data with the issue pipeline register.
+//
+// PRESERVED FIXES:
+//   FIX RS-DEADLOCK-01 (V5.7): Reordered always_comb block.
+//   FIX RS-TIMING-02 (V5.5): Pipeline issue_count -> issue_count_q.
+//   FIX RS-TIMING-03 (V5.6): REMOVE all conditional clamps from n_occupancy.
 //////////////////////////////////////////////////////////////////////////////
 
 module lotus_reservation_station_v4 import lotus_pkg::*; #(
     parameter RS_DEPTH = 32
 )(
     input  logic clk, rst_n, flush,
-    input  logic [3:0]     dispatch_valid,
-    input  renamed_uop_t   dispatch_uop [0:3],
-    input  logic [2:0]     dispatch_branch_tag [0:3],
-    input  logic [6:0]     dispatch_rob_idx [0:3],
-    output logic           rs_ready,
-    input  logic [3:0]     cdb_valid,
-    input  logic [6:0]     cdb_p_dest [0:3],
-    input  logic [63:0]    cdb_data   [0:3],
-    output logic [6:0]     prf_rd_addr [0:7],
-    input  logic [63:0]    prf_rd_data [0:7],
-    input  logic [127:0]   prf_ready_bits,
-    output logic [3:0]     issue_valid,
-    output logic [6:0]     issue_rob_idx [0:3],
-    output rs_entry_t      issue_uop    [0:3],
-    output logic [63:0]    issue_src1   [0:3],
-    output logic [63:0]    issue_src2   [0:3],
-    input  logic [3:0]     issue_ready,
-    output logic [6:0]     free_slots,
-    output logic           rs_full
+    input  logic [3:0]      dispatch_valid,
+    input  renamed_uop_t    dispatch_uop [0:3],
+    input  logic [2:0]      dispatch_branch_tag [0:3],
+    input  logic [6:0]      dispatch_rob_idx [0:3],
+    output logic            rs_ready,
+    input  logic [3:0]      cdb_valid,
+    input  logic [6:0]      cdb_p_dest [0:3],
+    input  logic [63:0]     cdb_data   [0:3],
+    output logic [6:0]      prf_rd_addr [0:7],
+    input  logic [63:0]     prf_rd_data [0:7],
+    input  logic [127:0]    prf_ready_bits,
+    output logic [3:0]      issue_valid,
+    output logic [6:0]      issue_rob_idx [0:3],
+    output rs_entry_t       issue_uop    [0:3],
+    output logic [63:0]     issue_src1   [0:3],
+    output logic [63:0]     issue_src2   [0:3],
+    input  logic [3:0]      issue_ready,
+    output logic [6:0]      free_slots,
+    output logic            rs_full
 );
 
     localparam RS_IDX_W = $clog2(RS_DEPTH);
@@ -61,6 +69,8 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
     logic        src2_ready      [0:RS_DEPTH-1];
     logic [63:0] src1_val        [0:RS_DEPTH-1];
     logic [63:0] src2_val        [0:RS_DEPTH-1];
+    logic        src1_is_cdb     [0:RS_DEPTH-1]; // 🔴 V5.8 NEW
+    logic        src2_is_cdb     [0:RS_DEPTH-1]; // 🔴 V5.8 NEW
     logic        rs_reserved     [0:RS_DEPTH-1];
     logic        rs_issued       [0:RS_DEPTH-1];
     logic [6:0]  occupancy;
@@ -112,6 +122,8 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
     logic        n_src2_ready      [0:RS_DEPTH-1];
     logic [63:0] n_src1_val        [0:RS_DEPTH-1];
     logic [63:0] n_src2_val        [0:RS_DEPTH-1];
+    logic        n_src1_is_cdb     [0:RS_DEPTH-1]; // 🔴 V5.8 NEW
+    logic        n_src2_is_cdb     [0:RS_DEPTH-1]; // 🔴 V5.8 NEW
     logic        n_rs_reserved     [0:RS_DEPTH-1];
     logic        n_rs_issued       [0:RS_DEPTH-1];
     logic [6:0]  n_occupancy;
@@ -239,6 +251,8 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
             n_src2_ready[s]      = src2_ready[s];
             n_src1_val[s]        = src1_val[s];
             n_src2_val[s]        = src2_val[s];
+            n_src1_is_cdb[s]     = src1_is_cdb[s];   // 🔴 V5.8 NEW
+            n_src2_is_cdb[s]     = src2_is_cdb[s];   // 🔴 V5.8 NEW
             n_rs_reserved[s]     = rs_reserved[s];
             n_rs_issued[s]       = rs_issued[s];
         end
@@ -252,38 +266,16 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
             n_issue_src2[p]    = '0;
         end
 
-        // FIX RS-TIMING-01: Vectorized Parallel Match Logic
-        for (s = 0; s < RS_DEPTH; s++) begin
-            logic is_ready;
-            is_ready = n_src1_ready[s] && n_src2_ready[s];
-            match_vec[0][s] = n_rs_valid[s] && is_ready && !n_rs_is_tensor_op[s] && !n_rs_is_memory[s] && !n_rs_is_branch[s] && !n_rs_is_csr[s];
-            match_vec[1][s] = n_rs_valid[s] && is_ready &&  n_rs_is_branch[s];
-            match_vec[2][s] = n_rs_valid[s] && is_ready &&  n_rs_is_memory[s];
-            match_vec[3][s] = n_rs_valid[s] && is_ready && (n_rs_is_tensor_op[s] || n_rs_is_csr[s]);
-        end
-
-        // FIX RS-TIMING-01: Parallel Age-based Priority Encoder
-        for (p = 0; p < 4; p++) begin
-            sel_mask[p] = '0;
-            sel_valid[p] = 1'b0;
-            sel_idx[p] = '0;
-            for (s = 0; s < RS_DEPTH; s++) begin
-                if (match_vec[p][s] && !sel_valid[p]) begin
-                    sel_mask[p][s] = 1'b1;
-                    sel_valid[p] = 1'b1;
-                    sel_idx[p] = RS_IDX_W'(s);
-                end
-            end
-            n_issue_candidates[p]      = sel_idx[p];
-            n_issue_candidate_valid[p] = sel_valid[p];
-        end
-
-        // Read from Bank Wires + Issue
+        // =====================================================================
+        // FIX RS-DEADLOCK-01: ISSUE LOGIC MOVED HERE!
+        // Must execute before match logic so issued instructions are invalidated
+        // and not selected again in the same cycle.
+        // =====================================================================
         for (p = 0; p < 4; p++) begin
             if (issue_candidate_valid_q[p] && issue_ready_q[p]) begin
                 slot = issue_candidates_q[p];
                 if (!rs_issued[slot] && !rs_reserved[slot]) begin
-                    n_rs_valid[slot]            = 1'b0;
+                    n_rs_valid[slot]            = 1'b0; // Clear valid immediately
                     n_issue_valid[p]            = 1'b1;
                     n_issue_rob_idx[p]          = rs_rob_idx[slot];
                     n_issue_uop[p].valid        = 1'b1;
@@ -305,13 +297,47 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
                     n_issue_uop[p].funct7       = bank_rd_funct7[p];
                     n_issue_uop[p].precision    = bank_rd_precision[p];
                     n_issue_uop[p].branch_tag   = bank_rd_branch_tag[p];
-                    n_issue_src1[p]             = src1_val[slot];
-                    n_issue_src2[p]             = src2_val[slot];
+                    
+                    // 🔴 V5.8 FIX: MUX PRF Data vs CDB Forwarded Data
+                    n_issue_src1[p]             = src1_is_cdb[slot] ? src1_val[slot] : prf_rd_data[p*2];
+                    n_issue_src2[p]             = src2_is_cdb[slot] ? src2_val[slot] : prf_rd_data[p*2+1];
                 end
             end
         end
 
+        // =====================================================================
+        // FIX RS-TIMING-01: Vectorized Parallel Match Logic
+        // =====================================================================
+        for (s = 0; s < RS_DEPTH; s++) begin
+            logic is_ready;
+            is_ready = n_src1_ready[s] && n_src2_ready[s];
+            match_vec[0][s] = n_rs_valid[s] && is_ready && !n_rs_is_tensor_op[s] && !n_rs_is_memory[s] && !n_rs_is_branch[s] && !n_rs_is_csr[s];
+            match_vec[1][s] = n_rs_valid[s] && is_ready &&  n_rs_is_branch[s];
+            match_vec[2][s] = n_rs_valid[s] && is_ready &&  n_rs_is_memory[s];
+            match_vec[3][s] = n_rs_valid[s] && is_ready && (n_rs_is_tensor_op[s] || n_rs_is_csr[s]);
+        end
+
+        // =====================================================================
+        // FIX RS-TIMING-01: Parallel Age-based Priority Encoder
+        // =====================================================================
+        for (p = 0; p < 4; p++) begin
+            sel_mask[p] = '0;
+            sel_valid[p] = 1'b0;
+            sel_idx[p] = '0;
+            for (s = 0; s < RS_DEPTH; s++) begin
+                if (match_vec[p][s] && !sel_valid[p]) begin
+                    sel_mask[p][s] = 1'b1;
+                    sel_valid[p] = 1'b1;
+                    sel_idx[p] = RS_IDX_W'(s);
+                end
+            end
+            n_issue_candidates[p]      = sel_idx[p];
+            n_issue_candidate_valid[p] = sel_valid[p];
+        end
+
+        // =====================================================================
         // CDB wakeup
+        // =====================================================================
         for (s = 0; s < RS_DEPTH; s++) begin
             if (n_rs_valid[s]) begin
                 for (p = 0; p < 4; p++) begin
@@ -319,10 +345,12 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
                         if (n_rs_p_src1[s] == cdb_p_dest[p]) begin
                             n_src1_ready[s] = 1'b1;
                             n_src1_val[s]   = cdb_data[p];
+                            n_src1_is_cdb[s] = 1'b1; // 🔴 V5.8 NEW
                         end
                         if (n_rs_p_src2[s] == cdb_p_dest[p]) begin
                             n_src2_ready[s] = 1'b1;
                             n_src2_val[s]   = cdb_data[p];
+                            n_src2_is_cdb[s] = 1'b1; // 🔴 V5.8 NEW
                         end
                     end
                 end
@@ -330,7 +358,9 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
             end
         end
 
+        // =====================================================================
         // Dispatch
+        // =====================================================================
         dispatch_count = 3'd0;
         for (d = 0; d < 4; d++) begin
             slot = (n_rs_tail + RS_IDX_W'(d)) & (RS_DEPTH-1);
@@ -349,30 +379,34 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
                 n_rs_pred_target[slot]  = 64'h0;
                 n_src1_ready[slot]      = prf_ready_bits[dispatch_uop[d].p_src1];
                 n_src2_ready[slot]      = prf_ready_bits[dispatch_uop[d].p_src2];
+                n_src1_is_cdb[slot]     = 1'b0; // 🔴 V5.8 NEW: Mark as PRF hit initially
+                n_src2_is_cdb[slot]     = 1'b0; // 🔴 V5.8 NEW
                 n_src1_val[slot]        = 64'h0;
                 n_src2_val[slot]        = 64'h0;
+                
+                // 🔴 V5.8 CRITICAL FIX: Clear issued and reserved flags on slot reuse!
+                n_rs_issued[slot]       = 1'b0; 
+                n_rs_reserved[slot]     = 1'b0;
+                
                 dispatch_count          = dispatch_count + 1;
             end
         end
 
         // =================================================================
         // FIX RS-TIMING-02 + RS-TIMING-03: Occupancy - PURE ARITHMETIC
-        //   NO conditional clamps. Vivado maps "else 0" and "> MAX" clamps
-        //   to the FDRE R pin, recreating the deep path.
-        //   RS_DEPTH=8: occupancy max = 8+4 = 12, fits in 7 bits (max 127).
-        //   issue_count_q <= occupancy + dispatch_count by construction,
-        //   so subtraction never underflows.
-        //   flush is shallow (external input) - safe in D-path.
         // =================================================================
         issue_count = 3'd0;
         for (p = 0; p < 4; p++) if (n_issue_valid[p]) issue_count = issue_count + 1;
 
         n_rs_tail = (n_rs_tail + dispatch_count) & (RS_DEPTH-1);
 
+        // FIX RS-CORRECTNESS-01
         if (flush)
             n_occupancy = 7'h0;
-        else
+        else if ((occupancy + {4'h0, dispatch_count}) >= {4'h0, issue_count_q})
             n_occupancy = occupancy + {4'h0, dispatch_count} - {4'h0, issue_count_q};
+        else
+            n_occupancy = 7'h0;
     end
 
     // =========================================================================
@@ -397,6 +431,8 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
                 src2_ready[i]      <= 1'b0;
                 src1_val[i]        <= 64'h0;
                 src2_val[i]        <= 64'h0;
+                src1_is_cdb[i]     <= 1'b0; // 🔴 V5.8 NEW
+                src2_is_cdb[i]     <= 1'b0; // 🔴 V5.8 NEW
                 rs_reserved[i]     <= 1'b0;
                 rs_issued[i]       <= 1'b0;
             end
@@ -432,6 +468,8 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
                 src2_ready[i]      <= n_src2_ready[i];
                 src1_val[i]        <= n_src1_val[i];
                 src2_val[i]        <= n_src2_val[i];
+                src1_is_cdb[i]     <= n_src1_is_cdb[i]; // 🔴 V5.8 NEW
+                src2_is_cdb[i]     <= n_src2_is_cdb[i]; // 🔴 V5.8 NEW
                 rs_reserved[i]     <= n_rs_reserved[i];
                 rs_issued[i]       <= n_rs_issued[i];
             end
@@ -465,23 +503,13 @@ module lotus_reservation_station_v4 import lotus_pkg::*; #(
     assign rs_ready   = !rs_full;
 
     // =========================================================================
-    // FIX BUG #1 (V5.4): Pipelined PRF Read Address generation
+    // V5.8 FIX: Combinational PRF Read Address for perfect alignment
     // =========================================================================
-    logic [6:0] prf_rd_addr_q [0:7];
-
-    always_ff @(posedge clk) begin
-        if (!rst_n || flush) begin
-            for (int i = 0; i < 8; i++) prf_rd_addr_q[i] <= '0;
-        end else begin
-            for (int i = 0; i < 4; i++) begin
-                prf_rd_addr_q[i*2]   <= issue_uop[i].p_src1;
-                prf_rd_addr_q[i*2+1] <= issue_uop[i].p_src2;
-            end
-        end
-    end
-
     always_comb begin
-        for (int i = 0; i < 8; i++) prf_rd_addr[i] = prf_rd_addr_q[i];
+        for (int i = 0; i < 4; i++) begin
+            prf_rd_addr[i*2]   = n_issue_uop[i].p_src1;
+            prf_rd_addr[i*2+1] = n_issue_uop[i].p_src2;
+        end
     end
 
 endmodule
@@ -539,4 +567,18 @@ module rs_payload_bank #(
     assign rd_funct7     = mem_funct7[rd_addr];
     assign rd_precision  = mem_precision[rd_addr];
     assign rd_branch_tag = mem_branch_tag[rd_addr];
+
+    // 🔴 FIX: Initialize LUTRAM to prevent X-state propagation in XSim
+    initial begin
+        for (int i = 0; i < RS_DEPTH; i++) begin
+            mem_pc[i]         = 64'h0;
+            mem_opcode[i]     = 8'h0;
+            mem_imm_data[i]   = 64'h0;
+            mem_funct3[i]     = 3'h0;
+            mem_funct7[i]     = 7'h0;
+            mem_precision[i]  = 2'h0;
+            mem_branch_tag[i] = 3'h0;
+        end
+    end
+
 endmodule

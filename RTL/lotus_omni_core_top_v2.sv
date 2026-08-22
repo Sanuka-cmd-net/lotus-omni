@@ -1,23 +1,25 @@
+// =========================================
+// File Name: lotus_omni_core_top_v2.sv
+// =========================================
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-// lotus_omni_core_top_v2 - V10.0 FULL-LINE L1D + TENSOR DATAFLOW
-// Engineer:      Sanuka Nethmira Amarasekara (Lotus Omni)
-// Target:        Xilinx Artix-7 xc7a200t
+// lotus_omni_core_top_v2 - V11.1 LSQ DEADLOCK FIX
+// Engineer:     Sanuka Nethmira Amarasekara (Lotus Omni)
+// Target:       Xilinx Artix-7 xc7a200t
 //
-// V10.0 (THIS VERSION):
-//   • Scalar load path now selects the correct 64-bit word from the 512-bit
-//     full line returned by lotus_l1d_cache V8.0 (load_offset_q captures
-//     agu_addr[5:0]; pending_load_offset latches it for the response).
-//   • Tensor dataflow fix retained: tensor_clear = rob_flush | feed_first,
-//     BF16/INT8 arrays .clear_acc -> tensor_clear, engine .feed_first wired.
+// V11.1 (THIS VERSION):
+//   • FIXED CRITICAL LSQ DEADLOCK BUG: Restricted SQ allocation strictly to 
+//     STORE instructions. Loads now bypass SQ allocation, preventing them 
+//     from polluting the Store Queue and blocking the drain logic.
 //
-// Previous timing fixes preserved: ROB-TIMING-01 (CDB pipeline),
-//   PMU-TIMING-01 (counter pipeline), PRF pipeline, LSQ pipelines,
-//   reset buffering.
+// V11.0: FIXED CRITICAL OPERAND FORWARDING BUG (AGU addr=0 fix)
+// V10.9: FIXED SIMULATION X-STATE BUG (BUFG removed for simulation)
+// V10.8: FIXED AGU/LSQ DEADLOCK (Removed erroneous 1-cycle delay)
+// V10.7: AGU PIPELINE DEADLOCK FIX (Initial attempt)
+// V10.6: FIXED FATAL TRUNCATION BUG (Unified flow gate buses)
 //////////////////////////////////////////////////////////////////////////////////
 
 module lotus_omni_core_top_v2 #(
-
     parameter DATA_WIDTH        = 64,
     parameter ADDR_WIDTH        = 64,
     parameter CORD_WIDTH        = 4,
@@ -29,7 +31,6 @@ module lotus_omni_core_top_v2 #(
     parameter NOC_FIFO_DEPTH    = 4,
     parameter TENSOR_FIFO_DEPTH = 4
 )(
-
     input  logic clk,
     input  logic rst_n,
 
@@ -76,14 +77,12 @@ module lotus_omni_core_top_v2 #(
     import lotus_pkg::*;
 
     // =========================================================================
-    // FIX TOP-TIMING-01: Global Reset Buffering & Fanout Control
+    // FIX TOP-TIMING-01 + V10.9 SIMULATION X-STATE FIX
+    // BUFG causes 'X' states in XSim. Use direct connection for simulation.
+    // Synthesis will automatically infer BUFG for high-fanout nets.
     // =========================================================================
     (* MAX_FANOUT = 300 *) logic rst_n_g;
-
-    BUFG u_rst_bufg (
-        .I(rst_n),
-        .O(rst_n_g)
-    );
+    assign rst_n_g = rst_n;
 
     // =========================================================================
     // FLOW GATE STATUS
@@ -257,7 +256,7 @@ module lotus_omni_core_top_v2 #(
     // =========================================================================
     // CDB
     // =========================================================================
-    logic        alu_cdb_valid,    branch_cdb_valid,    load_cdb_valid,    csr_cdb_valid;
+    logic        alu_cdb_valid,   branch_cdb_valid,   load_cdb_valid,   csr_cdb_valid;
     logic [6:0]  alu_cdb_p_dest,  branch_cdb_p_dest,  load_cdb_p_dest,  csr_cdb_p_dest;
     logic [63:0] alu_cdb_data,    branch_cdb_data,    load_cdb_data,    csr_cdb_data;
 
@@ -323,7 +322,7 @@ module lotus_omni_core_top_v2 #(
     end
 
     // =========================================================================
-    // ROB CDB (combinational - feeds into pipeline registers below)
+    // ROB CDB (Variables declared here, assignment logic moved to bottom!)
     // =========================================================================
     logic [3:0]  rob_cdb_valid;
     logic [6:0]  rob_cdb_rob_idx [0:3];
@@ -334,26 +333,7 @@ module lotus_omni_core_top_v2 #(
     logic        agu_misalign;
     logic [63:0] agu_misalign_addr;
 
-    always_comb begin
-        rob_cdb_valid[0]=alu_cdb_valid;
-        rob_cdb_rob_idx[0]=rs_issue_rob_idx_q[0]; rob_cdb_data[0]=alu_cdb_data;
-        rob_cdb_exception[0]=1'b0;                rob_cdb_exc_cause[0]=64'h0;
-
-        rob_cdb_valid[1]=branch_cdb_valid;
-        rob_cdb_rob_idx[1]=rs_issue_rob_idx_q[1]; rob_cdb_data[1]=branch_cdb_data;
-        rob_cdb_exception[1]=1'b0;                rob_cdb_exc_cause[1]=64'h0;
-
-        rob_cdb_valid[2]=load_cdb_valid;
-        rob_cdb_rob_idx[2]=rs_issue_rob_idx_q[2]; rob_cdb_data[2]=load_cdb_data;
-        rob_cdb_exception[2]=agu_misalign;
-        rob_cdb_exc_cause[2]=agu_misalign ? 64'h4 : 64'h0;
-
-        rob_cdb_valid[3]=csr_cdb_valid | ten_cdb_valid;
-        rob_cdb_rob_idx[3]=csr_cdb_valid ? csr_issue_rob_idx : rs_issue_rob_idx_q[3];
-        rob_cdb_data[3]=csr_cdb_valid ? csr_cdb_data : ten_cdb_data;
-        rob_cdb_exception[3]=csr_illegal_out && csr_issue_valid;
-        rob_cdb_exc_cause[3]=rob_cdb_exception[3] ? illegal_csr_cause : 64'h0;
-    end
+    logic        agu_completes;
 
     // =========================================================================
     // === TIMING FIX ROB-TIMING-01: Pipeline CDB→ROB path ===
@@ -391,9 +371,9 @@ module lotus_omni_core_top_v2 #(
     renamed_uop_t     rob_dispatch_uop [0:3];
     logic [6:0]       rob_alloc_idx [0:3];
     logic [3:0]       rob_commit_valid;
-    logic [6:0]       rob_commit_p_dest     [0:3];
+    logic [6:0]       rob_commit_p_dest      [0:3];
     logic [6:0]       rob_commit_p_old_dest [0:3];
-    logic [63:0]      rob_commit_data       [0:3];
+    logic [63:0]      rob_commit_data        [0:3];
     logic [3:0]       rob_commit_is_store;
     (* keep *) logic [4:0] rob_commit_lsq_idx [0:3];
     (* keep *) logic [6:0] rob_commit_rob_idx [0:3];
@@ -477,62 +457,72 @@ module lotus_omni_core_top_v2 #(
     logic         l2_l1d_resp_valid;
 
     // =========================================================================
-    // === TIMING FIX LSQ-TIMING-03: Pipeline load p_dest + offset (V10.0) ===
+    // === TIMING FIX LSQ-TIMING-03: Pipeline load p_dest + offset + rob_idx ===
     // =========================================================================
     logic [6:0] load_pdest_q;
     logic [5:0] load_offset_q;
+    logic [6:0] load_rob_idx_q;
 
     always_ff @(posedge clk) begin
         if (!rst_n_g) begin
-            load_pdest_q  <= 7'h00;
-            load_offset_q <= 6'd0;
+            load_pdest_q   <= 7'h00;
+            load_offset_q  <= 6'd0;
+            load_rob_idx_q <= 7'h00;
         end else if (agu_valid && !agu_is_store) begin
-            load_pdest_q  <= rs_issue_uops[2].p_dest;
-            load_offset_q <= agu_addr[5:0];      // V10.0: capture word offset
+            load_pdest_q   <= rs_issue_uops[2].p_dest;
+            load_offset_q  <= agu_addr[5:0];      // V10.0: capture word offset
+            load_rob_idx_q <= agu_rob_idx_q;
         end
     end
 
     // =========================================================================
-    // LOAD RESPONSE STATE MACHINE (V10.0: select 64-bit word from 512-bit line)
+    // LOAD RESPONSE STATE MACHINE
     // =========================================================================
     logic [6:0] pending_load_pdest;
     logic [5:0] pending_load_offset;
+    logic [6:0] pending_load_rob_idx;
     logic       load_state;
+    logic [6:0] load_cdb_rob_idx_out;
 
     always_ff @(posedge clk) begin
         if (!rst_n_g || rob_flush_reg) begin
-            pending_load_pdest  <= 7'h00;
-            pending_load_offset <= 6'd0;
-            load_state          <= 1'b0;
-            load_cdb_valid      <= 1'b0;
-            load_cdb_p_dest     <= 7'h00;
-            load_cdb_data       <= 64'h0;
+            pending_load_pdest   <= 7'h00;
+            pending_load_offset  <= 6'd0;
+            pending_load_rob_idx <= 7'h00;
+            load_state           <= 1'b0;
+            load_cdb_valid       <= 1'b0;
+            load_cdb_p_dest      <= 7'h00;
+            load_cdb_data        <= 64'h0;
+            load_cdb_rob_idx_out <= 7'h00;
         end else begin
             load_cdb_valid <= 1'b0;
             case (load_state)
                 1'b0: begin
                     if (load_fwd_valid) begin
-                        load_cdb_valid  <= 1'b1;
-                        load_cdb_p_dest <= load_pdest_q;
-                        load_cdb_data   <= load_fwd_data;
+                        load_cdb_valid       <= 1'b1;
+                        load_cdb_p_dest      <= load_pdest_q;
+                        load_cdb_data        <= load_fwd_data;
+                        load_cdb_rob_idx_out <= load_rob_idx_q;
                     end else if (load_needs_cache) begin
-                        pending_load_pdest  <= load_pdest_q;
-                        pending_load_offset <= load_offset_q;   // V10.0: latch offset
-                        load_state          <= 1'b1;
+                        pending_load_pdest   <= load_pdest_q;
+                        pending_load_offset  <= load_offset_q;
+                        pending_load_rob_idx <= load_rob_idx_q;
+                        load_state           <= 1'b1;
                     end
                 end
                 1'b1: begin
                     if (load_fwd_valid) begin
-                        load_cdb_valid  <= 1'b1;
-                        load_cdb_p_dest <= pending_load_pdest;
-                        load_cdb_data   <= load_fwd_data;
-                        load_state      <= 1'b0;
+                        load_cdb_valid       <= 1'b1;
+                        load_cdb_p_dest      <= pending_load_pdest;
+                        load_cdb_data        <= load_fwd_data;
+                        load_cdb_rob_idx_out <= pending_load_rob_idx;
+                        load_state           <= 1'b0;
                     end else if (l1d_cpu_resp_valid) begin
-                        load_cdb_valid  <= 1'b1;
-                        load_cdb_p_dest <= pending_load_pdest;
-                        // V10.0: select correct 64-bit word from 512-bit full line
-                        load_cdb_data   <= l1d_cpu_resp_data[{pending_load_offset[5:3],6'd0} +: 64];
-                        load_state      <= 1'b0;
+                        load_cdb_valid       <= 1'b1;
+                        load_cdb_p_dest      <= pending_load_pdest;
+                        load_cdb_data        <= l1d_cpu_resp_data[{pending_load_offset[5:3],6'd0} +: 64];
+                        load_cdb_rob_idx_out <= pending_load_rob_idx;
+                        load_state           <= 1'b0;
                     end
                 end
             endcase
@@ -759,9 +749,13 @@ module lotus_omni_core_top_v2 #(
 
     assign rs_issue_ready = 4'b1111;
 
+    // =========================================================================
+    // FIX TOP-DEADLOCK-01: Gating dispatch_valid strictly with ren_uop_valid 
+    //                      (Removed combinational dec_dispatch_ready mask).
+    // =========================================================================
     lotus_reservation_station_v4 #(.RS_DEPTH(RS_DEPTH)) u_rs (
         .clk(clk), .rst_n(rst_n_g), .flush(rob_flush_reg),
-        .dispatch_valid(ren_uop_valid & {4{dec_dispatch_ready}}), .dispatch_uop(ren_uops), .dispatch_branch_tag(rs_dispatch_branch_tag),
+        .dispatch_valid(ren_uop_valid), .dispatch_uop(ren_uops), .dispatch_branch_tag(rs_dispatch_branch_tag),
         .dispatch_rob_idx(rob_alloc_idx), .rs_ready(rs_ready_out),
         .cdb_valid(rs_cdb_valid), .cdb_p_dest(rs_cdb_p_dest), .cdb_data(rs_cdb_data),
         .prf_rd_addr(prf_rd_addr), .prf_rd_data(prf_rd_data), .prf_ready_bits(prf_ready_bits),
@@ -825,33 +819,47 @@ module lotus_omni_core_top_v2 #(
     logic [3:0][6:0]  alu_cdb_p_dest_in_p; logic [3:0][63:0] alu_cdb_data_in_p; logic [3:0] alu_cdb_valid_in_p;
     always_comb begin for (int i = 0; i < 4; i++) begin alu_cdb_p_dest_in_p[i] = rs_cdb_p_dest[i]; alu_cdb_data_in_p[i] = rs_cdb_data[i]; alu_cdb_valid_in_p[i] = rs_cdb_valid[i]; end end
 
+    // =========================================================================
+    // 🛠️ V11.0 FIX: ALU uses RS forwarded operands, NOT stale PRF reads
+    // =========================================================================
     lotus_alu_masterpiece u_alu (
         .clk(clk), .rst_n(rst_n_g), .flush(rob_flush_reg), .uop_in(rs_issue_uops[0]), .valid_in(rs_issue_valid[0]),
-        .prf_src1_data(prf_rd_data[0]), .prf_src2_data(prf_rd_data[1]),
+        .prf_src1_data(rs_issue_src1[0]), .prf_src2_data(rs_issue_src2[0]),  // FIXED: Use RS forwarded operands
         .cdb_p_dest_in(alu_cdb_p_dest_in_p), .cdb_data_in(alu_cdb_data_in_p), .cdb_valid_in(alu_cdb_valid_in_p),
         .cdb_p_dest_out(alu_cdb_p_dest), .cdb_data_out(alu_cdb_data), .cdb_valid_out(alu_cdb_valid)
     );
 
+    // =========================================================================
+    // 🛠️ V11.0 FIX: Branch uses RS forwarded operands, NOT stale PRF reads
+    // =========================================================================
     lotus_branch_exec u_branch_exec (
         .clk(clk), .rst_n(rst_n_g), .issue_valid(rs_issue_valid[1]), .issue_pc(rs_issue_uops[1].pc), .issue_opcode(rs_issue_uops[1].opcode), .issue_funct3(rs_issue_uops[1].funct3),
-        .issue_src1(prf_rd_data[2]), .issue_src2(prf_rd_data[3]), .issue_imm(rs_issue_uops[1].imm_data), .issue_p_dest(rs_issue_uops[1].p_dest),
+        .issue_src1(rs_issue_src1[1]), .issue_src2(rs_issue_src2[1]), .issue_imm(rs_issue_uops[1].imm_data), .issue_p_dest(rs_issue_uops[1].p_dest),  // FIXED
         .issue_pred_taken(rs_issue_uops[1].pred_taken), .issue_pred_target(rs_issue_uops[1].pred_target), .issue_branch_tag(rs_issue_uops[1].branch_tag),
         .cdb_valid(branch_cdb_valid), .cdb_p_dest(branch_cdb_p_dest), .cdb_data(branch_cdb_data),
         .branch_resolved(branch_resolved), .branch_correct_pc_valid(branch_correct_pc_valid), .branch_correct_pc(branch_correct_pc),
         .branch_mispredict(branch_mispredicted), .branch_tag_out(flush_branch_tag_ren), .perf_mispredict(branch_perf_mispredict)
     );
 
+    // =========================================================================
+    // 🛠️ V11.0 FIX: AGU uses RS forwarded operands, NOT stale PRF reads
+    // This fixes "STORE DRAIN addr=0000000000000000" bug!
+    // =========================================================================
     lotus_agu u_agu (
         .clk(clk), .rst_n(rst_n_g), .flush(rob_flush_reg), .uop_in(rs_issue_uops[2]), .valid_in(rs_issue_valid[2]),
-        .prf_base_data(prf_rd_data[4]), .prf_store_data(prf_rd_data[5]),
+        .prf_base_data(rs_issue_src1[2]), .prf_store_data(rs_issue_src2[2]),  // FIXED: Use RS forwarded operands
         .agu_valid_out(agu_valid), .agu_is_store_out(agu_is_store), .agu_addr_out(agu_addr), .agu_data_out(agu_data), .agu_wmask_out(agu_wmask),
         .misalign_exception(agu_misalign), .misalign_addr(agu_misalign_addr)
     );
 
-    // === TIMING FIX LSQ-TIMING-02: LSQ uses REGISTERED commit ===
+    // =========================================================================
+    // 🛠️ V11.1 FIX: LSQ Deadlock Fix - Only allocate STORES into the SQ.
+    // Loads bypass SQ allocation to prevent SQ pollution and drain blocking.
+    // =========================================================================
     lotus_lsq_masterpiece u_lsq (
         .clk(clk), .rst_n(rst_n_g), .flush(rob_flush_reg),
-        .alloc_valid(rs_issue_valid[2] && rs_issue_uops[2].is_memory), .alloc_is_store(rs_issue_valid[2] && rs_issue_uops[2].is_memory && (rs_issue_uops[2].opcode[6:0] == 7'b0100011)),
+        .alloc_valid(rs_issue_valid[2] && rs_issue_uops[2].is_memory && (rs_issue_uops[2].opcode[6:0] == 7'b0100011)), 
+        .alloc_is_store(rs_issue_valid[2] && rs_issue_uops[2].is_memory && (rs_issue_uops[2].opcode[6:0] == 7'b0100011)),
         .alloc_rob_idx(rs_issue_rob_idx[2]), .sq_ready(), .alloc_sq_idx(),
         .agu_valid(agu_valid), .agu_is_store(agu_is_store), .agu_rob_idx(agu_rob_idx_q), .agu_addr(agu_addr), .agu_data(agu_data), .agu_wmask(agu_wmask),
         .load_fwd_valid(load_fwd_valid), .load_fwd_data(load_fwd_data), .load_needs_cache(load_needs_cache),
@@ -862,7 +870,7 @@ module lotus_omni_core_top_v2 #(
     );
 
     // =========================================================================
-    // FLOW CONTROL GATES
+    // FLOW CONTROL GATES (V10.6: EXPLICIT UNIFIED BUSES TO FIX VIVADO TRUNCATION)
     // =========================================================================
     logic        lsu_gate_upstream_valid, lsu_gate_upstream_ready;
     logic        lsu_gate_downstream_valid, lsu_gate_downstream_ready;
@@ -872,48 +880,99 @@ module lotus_omni_core_top_v2 #(
 
     assign lsu_gate_upstream_valid = lsq_l1d_req_valid;
 
-    congestion_aware_flow_gate #(.DATA_WIDTH(64+64+8), .FIFO_DEPTH(LSU_FIFO_DEPTH), .LOG2_FIFO_DEPTH($clog2(LSU_FIFO_DEPTH))) u_lsu_flow_gate (
-        .clk(clk), .rst_n(rst_n_g), .upstream_valid(lsu_gate_upstream_valid), .upstream_ready(lsu_gate_upstream_ready), .upstream_data({lsq_l1d_req_addr, lsq_l1d_req_data, lsq_l1d_req_wmask}),
-        .downstream_valid(lsu_gate_downstream_valid), .downstream_ready(lsu_gate_downstream_ready), .downstream_data({l1d_req_addr_int, l1d_req_data_int, l1d_req_wmask_int}),
-        .gate_enable(1'b1), .throttle_limit(8'hFF), .max_outstanding(8'd16), .gate_stalled(lsu_gate_stalled), .fifo_count(lsu_fifo_count), .credit_count(lsu_credit_count), .duty_cycle_actual()
+    // V10.6: Explicit Buses for LSU
+    logic [136:0] lsu_upstream_bus;
+    logic [136:0] lsu_downstream_bus;
+    
+    assign lsu_upstream_bus = {lsq_l1d_req_addr, lsq_l1d_req_data, lsq_l1d_req_wmask, lsq_l1d_req_rw};
+    assign {l1d_req_addr_int, l1d_req_data_int, l1d_req_wmask_int, l1d_req_rw_int} = lsu_downstream_bus;
+
+    congestion_aware_flow_gate #(.DATA_WIDTH(137), .FIFO_DEPTH(LSU_FIFO_DEPTH), .LOG2_FIFO_DEPTH($clog2(LSU_FIFO_DEPTH))) u_lsu_flow_gate (
+        .clk(clk), .rst_n(rst_n_g),
+        .upstream_valid(lsu_gate_upstream_valid),
+        .upstream_ready(lsu_gate_upstream_ready),
+        .upstream_data(lsu_upstream_bus),
+        .downstream_valid(lsu_gate_downstream_valid),
+        .downstream_ready(lsu_gate_downstream_ready),
+        .downstream_data(lsu_downstream_bus),
+        .gate_enable(1'b1), .throttle_limit(8'hFF), .max_outstanding(8'd16),
+        .gate_stalled(lsu_gate_stalled), .fifo_count(lsu_fifo_count), .credit_count(lsu_credit_count), .duty_cycle_actual()
     );
 
-    assign lsq_l1d_req_ready  = lsu_gate_upstream_ready;
-    assign l1d_req_valid_int   = lsu_gate_downstream_valid;
-    assign l1d_req_rw_int      = lsq_l1d_req_rw;
+    assign lsq_l1d_req_ready = lsu_gate_upstream_ready;
+    assign l1d_req_valid_int = lsu_gate_downstream_valid;
 
     // DRAM gate
     logic        dram_gate_upstream_valid, dram_gate_upstream_ready, dram_gate_downstream_valid;
-    logic [64+1024+1-1:0] dram_gate_downstream_data;
     logic        dram_req_valid_from_l2, dram_req_rw_from_l2;
     logic [63:0] dram_req_addr_from_l2; logic [1023:0] dram_req_data_from_l2;
     logic        dram_req_rw_gated; logic [63:0] dram_req_addr_gated; logic [1023:0] dram_req_data_gated;
 
     assign dram_gate_upstream_valid = dram_req_valid_from_l2;
-    congestion_aware_flow_gate #(.DATA_WIDTH(64+1024+1), .FIFO_DEPTH(DRAM_FIFO_DEPTH), .LOG2_FIFO_DEPTH($clog2(DRAM_FIFO_DEPTH))) u_dram_flow_gate (
-        .clk(clk), .rst_n(rst_n_g), .upstream_valid(dram_gate_upstream_valid), .upstream_ready(dram_gate_upstream_ready), .upstream_data({dram_req_addr_from_l2, dram_req_data_from_l2, dram_req_rw_from_l2}),
-        .downstream_valid(dram_gate_downstream_valid), .downstream_ready(1'b1), .downstream_data(dram_gate_downstream_data),
-        .gate_enable(1'b1), .throttle_limit(8'hFF), .max_outstanding(8'd8), .gate_stalled(dram_gate_stalled), .fifo_count(dram_fifo_count), .credit_count(dram_credit_count), .duty_cycle_actual()
+
+    // V10.6: Explicit Buses for DRAM
+    logic [1088:0] dram_upstream_bus;
+    logic [1088:0] dram_downstream_bus;
+
+    assign dram_upstream_bus = {dram_req_addr_from_l2, dram_req_data_from_l2, dram_req_rw_from_l2};
+    assign {dram_req_addr_gated, dram_req_data_gated, dram_req_rw_gated} = dram_downstream_bus;
+
+    congestion_aware_flow_gate #(.DATA_WIDTH(1089), .FIFO_DEPTH(DRAM_FIFO_DEPTH), .LOG2_FIFO_DEPTH($clog2(DRAM_FIFO_DEPTH))) u_dram_flow_gate (
+        .clk(clk), .rst_n(rst_n_g),
+        .upstream_valid(dram_gate_upstream_valid),
+        .upstream_ready(dram_gate_upstream_ready),
+        .upstream_data(dram_upstream_bus),
+        .downstream_valid(dram_gate_downstream_valid),
+        .downstream_ready(1'b1),
+        .downstream_data(dram_downstream_bus),
+        .gate_enable(1'b1), .throttle_limit(8'hFF), .max_outstanding(8'd8),
+        .gate_stalled(dram_gate_stalled), .fifo_count(dram_fifo_count), .credit_count(dram_credit_count), .duty_cycle_actual()
     );
-    assign {dram_req_addr_gated, dram_req_data_gated, dram_req_rw_gated} = dram_gate_downstream_data;
-    assign dram_req_valid = dram_gate_downstream_valid; assign dram_req_rw = dram_req_rw_gated; assign dram_req_addr = dram_req_addr_gated; assign dram_req_data = dram_req_data_gated;
+    assign dram_req_valid = dram_gate_downstream_valid; 
+    assign dram_req_rw    = dram_req_rw_gated; 
+    assign dram_req_addr  = dram_req_addr_gated; 
+    assign dram_req_data  = dram_req_data_gated;
 
     // NOC gate
-    logic noc_gate_upstream_valid, noc_gate_upstream_ready, noc_gate_downstream_valid; logic [64+2+3-1:0] noc_gate_downstream_data;
+    logic noc_gate_upstream_valid, noc_gate_upstream_ready, noc_gate_downstream_valid; 
+    
+    // V10.6: Explicit Buses for NOC
+    logic [68:0] noc_upstream_bus;
+    logic [68:0] noc_downstream_bus;
+    logic [68:0] noc_gate_downstream_data;
+
     assign noc_gate_upstream_valid = noc_tx_valid;
-    congestion_aware_flow_gate #(.DATA_WIDTH(64+2+3), .FIFO_DEPTH(NOC_FIFO_DEPTH), .LOG2_FIFO_DEPTH($clog2(NOC_FIFO_DEPTH))) u_noc_flow_gate (
-        .clk(clk), .rst_n(rst_n_g), .upstream_valid(noc_gate_upstream_valid), .upstream_ready(noc_gate_upstream_ready), .upstream_data({noc_tx_data, noc_tx_flit_type, noc_tx_port_id}),
-        .downstream_valid(noc_gate_downstream_valid), .downstream_ready(noc_tx_ready), .downstream_data(noc_gate_downstream_data),
-        .gate_enable(1'b1), .throttle_limit(8'hFF), .max_outstanding(8'd8), .gate_stalled(noc_gate_stalled), .fifo_count(noc_fifo_count), .credit_count(noc_credit_count), .duty_cycle_actual()
+    assign noc_upstream_bus = {noc_tx_data, noc_tx_flit_type, noc_tx_port_id};
+    assign noc_gate_downstream_data = noc_downstream_bus;
+
+    congestion_aware_flow_gate #(.DATA_WIDTH(69), .FIFO_DEPTH(NOC_FIFO_DEPTH), .LOG2_FIFO_DEPTH($clog2(NOC_FIFO_DEPTH))) u_noc_flow_gate (
+        .clk(clk), .rst_n(rst_n_g),
+        .upstream_valid(noc_gate_upstream_valid),
+        .upstream_ready(noc_gate_upstream_ready),
+        .upstream_data(noc_upstream_bus),
+        .downstream_valid(noc_gate_downstream_valid),
+        .downstream_ready(noc_tx_ready),
+        .downstream_data(noc_downstream_bus),
+        .gate_enable(1'b1), .throttle_limit(8'hFF), .max_outstanding(8'd8),
+        .gate_stalled(noc_gate_stalled), .fifo_count(noc_fifo_count), .credit_count(noc_credit_count), .duty_cycle_actual()
     );
 
     // Tensor gate (Stubbed)
-    logic tensor_gate_upstream_valid, tensor_gate_upstream_ready, tensor_gate_downstream_valid; logic [127:0] tensor_gate_downstream_data;
+    logic tensor_gate_upstream_valid, tensor_gate_upstream_ready, tensor_gate_downstream_valid; 
+    logic [127:0] tensor_gate_downstream_data;
+    
     assign tensor_gate_upstream_valid = 1'b0;
+    
     congestion_aware_flow_gate #(.DATA_WIDTH(128), .FIFO_DEPTH(TENSOR_FIFO_DEPTH), .LOG2_FIFO_DEPTH($clog2(TENSOR_FIFO_DEPTH))) u_tensor_flow_gate (
-        .clk(clk), .rst_n(rst_n_g), .upstream_valid(tensor_gate_upstream_valid), .upstream_ready(tensor_gate_upstream_ready), .upstream_data(128'h0),
-        .downstream_valid(tensor_gate_downstream_valid), .downstream_ready(1'b1), .downstream_data(tensor_gate_downstream_data),
-        .gate_enable(tensor_en_csr), .throttle_limit(8'hFF), .max_outstanding(8'd4), .gate_stalled(tensor_gate_stalled), .fifo_count(tensor_fifo_count), .credit_count(tensor_credit_count), .duty_cycle_actual()
+        .clk(clk), .rst_n(rst_n_g),
+        .upstream_valid(tensor_gate_upstream_valid),
+        .upstream_ready(tensor_gate_upstream_ready),
+        .upstream_data(128'h0),
+        .downstream_valid(tensor_gate_downstream_valid),
+        .downstream_ready(1'b1),
+        .downstream_data(tensor_gate_downstream_data),
+        .gate_enable(tensor_en_csr), .throttle_limit(8'hFF), .max_outstanding(8'd4),
+        .gate_stalled(tensor_gate_stalled), .fifo_count(tensor_fifo_count), .credit_count(tensor_credit_count), .duty_cycle_actual()
     );
 
     // =========================================================================
@@ -921,12 +980,12 @@ module lotus_omni_core_top_v2 #(
     // =========================================================================
     lotus_tensor_mem_arbiter u_tensor_arbiter (
         .clk              (clk), .rst_n            (rst_n_g),
-        .cpu_req_valid    (l1d_req_valid_int), .cpu_req_rw       (l1d_req_rw_int),
-        .cpu_req_addr     (l1d_req_addr_int), .cpu_req_data     (l1d_req_data_int),
-        .cpu_req_wmask    (l1d_req_wmask_int),.cpu_req_ready    (lsu_gate_downstream_ready),
+        .cpu_req_valid    (l1d_req_valid_int), .cpu_req_rw        (l1d_req_rw_int),
+        .cpu_req_addr     (l1d_req_addr_int), .cpu_req_data       (l1d_req_data_int),
+        .cpu_req_wmask    (l1d_req_wmask_int),.cpu_req_ready     (lsu_gate_downstream_ready),
         .tensor_req_valid (ten_mem_req_valid), .tensor_req_ready (arb_to_ten_mem_ready), .tensor_req_addr(ten_mem_req_addr),
-        .l1d_req_valid    (arb_to_l1d_req_valid), .l1d_req_rw       (arb_to_l1d_req_rw),
-        .l1d_req_addr     (arb_to_l1d_req_addr), .l1d_req_data     (arb_to_l1d_req_data),
+        .l1d_req_valid    (arb_to_l1d_req_valid), .l1d_req_rw        (arb_to_l1d_req_rw),
+        .l1d_req_addr     (arb_to_l1d_req_addr), .l1d_req_data       (arb_to_l1d_req_data),
         .l1d_req_wmask    (arb_to_l1d_req_wmask),.l1d_req_ready    (l1d_to_arb_req_ready),
         .l1d_resp_valid   (l1d_cpu_resp_valid), .l1d_resp_data    (l1d_cpu_resp_data),
         .cpu_resp_valid   (), .cpu_resp_data    (),
@@ -934,7 +993,7 @@ module lotus_omni_core_top_v2 #(
     );
 
     lotus_tensor_engine #(.DRAIN_LATENCY(24)) u_tensor_engine (
-        .clk              (clk), .rst_n            (rst_n_g), .flush            (rob_flush_reg),
+        .clk              (clk), .rst_n            (rst_n_g), .flush              (rob_flush_reg),
         .issue_valid      (rs_issue_valid[3] && rs_issue_uops[3].is_tensor_op && engine_ready),
         .issue_p_dest     (rs_issue_uops[3].p_dest), .issue_base_addr  (prf_rd_data[6]),
         .issue_funct3     (rs_issue_uops[3].funct3),
@@ -945,7 +1004,7 @@ module lotus_omni_core_top_v2 #(
         .weight_int8_out  (tensor_weight_int8), .input_int8_out   (tensor_input_int8),
         .array_enable     (tensor_array_enable), .tensor_array_busy(tensor_array_busy),
         .feed_first       (tensor_feed_first),
-        .bf16_results     (tensor_bf16_results), .int8_results     (tensor_int8_out),
+        .bf16_results     (tensor_bf16_results), .int8_results      (tensor_int8_out),
         .tensor_cdb_valid (ten_cdb_valid), .tensor_cdb_p_dest(ten_cdb_p_dest), .tensor_cdb_data(ten_cdb_data),
         .tensor_cdb_ready (1'b1), .engine_ready     (engine_ready)
     );
@@ -1026,5 +1085,37 @@ module lotus_omni_core_top_v2 #(
         .sparsity_en(),
         .tensor_en()
     );
+
+    // =========================================================================
+    // SCOPING / IMPLICIT WIRE FIX (Moved to bottom)
+    // =========================================================================
+    always_comb begin
+        // V10.8 FIX: AGU already pipelines internally, use direct signals
+        agu_completes = (agu_valid & agu_is_store) | (agu_valid & agu_misalign);
+
+        rob_cdb_valid[0]=alu_cdb_valid;
+        rob_cdb_rob_idx[0]=rs_issue_rob_idx_q[0]; rob_cdb_data[0]=alu_cdb_data;
+        rob_cdb_exception[0]=1'b0;                rob_cdb_exc_cause[0]=64'h0;
+
+        rob_cdb_valid[1]=branch_cdb_valid;
+        rob_cdb_rob_idx[1]=rs_issue_rob_idx_q[1]; rob_cdb_data[1]=branch_cdb_data;
+        rob_cdb_exception[1]=1'b0;                rob_cdb_exc_cause[1]=64'h0;
+
+        // Port 2 is strictly for Loads
+        rob_cdb_valid[2]     = load_cdb_valid;
+        rob_cdb_rob_idx[2]   = load_cdb_rob_idx_out;
+        rob_cdb_data[2]      = load_cdb_data;
+        rob_cdb_exception[2] = 1'b0;
+        rob_cdb_exc_cause[2] = 64'h0;
+
+        // Port 3 handles CSR, Tensor, and AGU (Stores/Misaligns)
+        rob_cdb_valid[3]     = csr_cdb_valid | ten_cdb_valid | agu_completes;
+        rob_cdb_rob_idx[3]   = agu_completes ? agu_rob_idx_q : (csr_cdb_valid ? csr_issue_rob_idx : rs_issue_rob_idx_q[3]);
+        rob_cdb_data[3]      = csr_cdb_valid ? csr_cdb_data : ten_cdb_data;
+        
+        // V10.8 FIX: Use direct agu_misalign signal
+        rob_cdb_exception[3] = agu_completes ? agu_misalign : (csr_illegal_out && csr_issue_valid);
+        rob_cdb_exc_cause[3] = agu_completes ? 64'h4 : ((csr_illegal_out && csr_issue_valid) ? illegal_csr_cause : 64'h0);
+    end
 
 endmodule : lotus_omni_core_top_v2

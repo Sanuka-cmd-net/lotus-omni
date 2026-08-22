@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ----------------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version              : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025
-| Date                      : Thu Aug  6 18:31:00 2026
+| Date                      : Fri Aug 21 11:32:52 2026
 | Host                      : SanukaPCs running 64-bit major release  (build 9200)
 | Command                   : report_io -file lotus_axi4_wrapper_io_placed.rpt
 | Design                    : lotus_axi4_wrapper

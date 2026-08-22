@@ -1,24 +1,23 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-// lotus_rob_masterpiece - V7.7 TIMING FIX (REGISTERED rob_valid IN CDB WRITEBACK)
-// Engineer:      Sanuka Nethmira Amarasekara (Lotus Omni)
-// Target:        Xilinx Artix-7 xc7a200t
+// lotus_rob_masterpiece - V8.3 STORE-BIT FIX
+// Engineer:     Sanuka Nethmira Amarasekara (Lotus Omni)
+// Target:       Xilinx Artix-7 xc7a200t
 //
-// FIX V7.7 (THIS VERSION): Use REGISTERED rob_valid in CDB writeback (Step 2).
-//   Critical path (timing_fix4): occupancy_local_reg -> tail -> disp_ptr ->
-//   n_rob_valid -> CDB writeback -> n_rob_exc_valid -> rob_exc_valid_reg/D
-//   (13 levels, -1.343ns WNS).
+// FIX V8.2: Replaced cumulative occupancy accumulation with direct (tail - head)
+// calculation to prevent occupancy desynchronization and deadlock.
 //
-//   Root cause: Step 2 used n_rob_valid (combinational, depends on the dispatch
-//   path occupancy -> tail -> disp_ptr), coupling CDB writeback to that deep chain.
-//
-//   Fix: CDB writeback targets PREVIOUSLY dispatched entries, so the REGISTERED
-//   rob_valid already holds the correct valid bit. Using rob_valid (registered)
-//   instead of n_rob_valid decouples CDB writeback from the dispatch path.
-//   Functionally equivalent (a same-cycle dispatch cannot be the CDB target).
-//
-// Previous fixes preserved: V7.6 parallel commit pre-extraction, V7.5 banked RAM,
-// V7.4 parameterized bit-select.
+// FIX V8.3 (THIS VERSION): rob_is_store was computed as
+//   `dispatch_uop[i].is_memory && !dispatch_uop[i].is_branch`, which is TRUE
+//   for both loads AND stores (both are is_memory, neither is_branch). This
+//   made commit_is_store fire for loads too, but more importantly it never
+//   reliably distinguished stores at all downstream - confirmed via
+//   simulation: commit_is_store was 0 on every commit, including the actual
+//   store instruction. LSQ's store-completion path depends on
+//   commit_is_store[j] to mark sq_array[].committed, so stores never drained
+//   and the pipeline deadlocked waiting for store queue space.
+//   Fix: derive is_store directly from the RV64I opcode (STORE = 7'b0100011),
+//   which unambiguously separates stores from loads.
 //////////////////////////////////////////////////////////////////////////////////
 
 module lotus_rob_masterpiece import lotus_pkg::*; #(
@@ -63,7 +62,7 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
 );
 
     localparam ROB_IDX_W         = $clog2(ROB_ENTRIES);
-    localparam ROB_SAFETY_MARGIN = 16;
+    localparam ROB_SAFETY_MARGIN = 2;
     localparam BANK_DEPTH        = ROB_ENTRIES / DISPATCH_WIDTH;
     localparam BANK_IDX_W        = $clog2(BANK_DEPTH);
 
@@ -78,7 +77,7 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
     logic [63:0] rob_comp_data [0:ROB_ENTRIES-1];
 
     // =========================================================================
-    // BANKED RAM Arrays (FIX V7.3 - Distributed for Async Read)
+    // BANKED RAM Arrays (Distributed for Async Read)
     // =========================================================================
     (* ram_style = "distributed" *) logic [63:0] pload_pc_b0         [0:BANK_DEPTH-1];
     (* ram_style = "distributed" *) logic [63:0] pload_pc_b1         [0:BANK_DEPTH-1];
@@ -112,7 +111,7 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
     // RAM Write Logic (Synchronous) - SINGLE WRITE PORT PER BANK
     // =========================================================================
     logic [ROB_IDX_W-1:0] pload_we_ptr      [0:DISPATCH_WIDTH-1];
-    logic                 pload_we_en        [0:DISPATCH_WIDTH-1];
+    logic                 pload_we_en       [0:DISPATCH_WIDTH-1];
     logic [63:0]          pload_pc_w        [0:DISPATCH_WIDTH-1];
     logic [6:0]           pload_p_dest_w    [0:DISPATCH_WIDTH-1];
     logic [6:0]           pload_p_old_dest_w[0:DISPATCH_WIDTH-1];
@@ -218,10 +217,10 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
     end
 
     // =========================================================================
-    // FIX V7.5 - Combinational Read Logic & Pre-Extracted MUXes (NO CDB bypass)
+    // Combinational Read Logic & Pre-Extracted MUXes
     // =========================================================================
-    logic [63:0] commit_pc_read      [0:COMMIT_WIDTH-1];
-    logic [6:0]  commit_p_dest_read  [0:COMMIT_WIDTH-1];
+    logic [63:0] commit_pc_read         [0:COMMIT_WIDTH-1];
+    logic [6:0]  commit_p_dest_read     [0:COMMIT_WIDTH-1];
     logic [6:0]  commit_p_old_dest_read [0:COMMIT_WIDTH-1];
     logic [ROB_IDX_W-1:0] commit_c_idx [0:COMMIT_WIDTH-1];
 
@@ -289,8 +288,8 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
         integer i, p;
         logic [ROB_IDX_W-1:0] disp_ptr;
         logic [3:0] disp_cnt, commit_cnt;
-        logic [7:0] retire_cnt;
         logic       exc_found;
+        logic       stop_commit;
 
         for (i = 0; i < ROB_ENTRIES; i++) begin
             n_rob_valid[i]     = rob_valid[i];
@@ -302,7 +301,6 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
         end
         n_head            = head;
         n_tail            = tail;
-        n_occupancy       = occupancy_local;
         n_flush_req       = 1'b0;
         n_flush_target_pc = mtvec;
         n_exception_valid = 1'b0;
@@ -313,10 +311,12 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
         disp_ptr = tail;
         disp_cnt = 4'h0;
         for (i = 0; i < DISPATCH_WIDTH; i++) begin
-            if (dispatch_valid[i] && (n_occupancy + 8'(disp_cnt) < ROB_ENTRIES)) begin
+            if (dispatch_valid[i] && (occupancy_local + 8'(disp_cnt) < ROB_ENTRIES)) begin
                 n_rob_valid[disp_ptr]     = 1'b1;
                 n_rob_completed[disp_ptr] = 1'b0;
-                n_rob_is_store[disp_ptr]  = dispatch_uop[i].is_memory && !dispatch_uop[i].is_branch;
+                // 🔴 FIX V8.3: derive is_store from the RV64I STORE opcode
+                n_rob_is_store[disp_ptr]  = dispatch_uop[i].is_memory &&
+                                             (dispatch_uop[i].opcode[6:0] == 7'b0100011);
                 n_rob_exc_valid[disp_ptr] = 1'b0;
                 n_rob_exc_cause[disp_ptr] = 64'h0;
                 disp_ptr = (disp_ptr + 1'b1) & (ROB_ENTRIES-1);
@@ -325,16 +325,9 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
         end
         n_tail = disp_ptr;
 
-        // =====================================================================
         // Step 2: CDB writeback
-        // === FIX V7.7: Use REGISTERED rob_valid (was n_rob_valid) ===
-        //   CDB targets previously-dispatched entries; the registered rob_valid
-        //   already holds the correct bit. This removes the dispatch-path
-        //   dependency (occupancy -> tail -> disp_ptr -> n_rob_valid) from the
-        //   CDB writeback chain that fed rob_exc_valid_reg/D (-1.343ns).
-        // =====================================================================
         for (p = 0; p < 4; p++) begin
-            if (cdb_valid[p] && rob_valid[cdb_rob_idx[p]]) begin   // <-- rob_valid (REGISTERED)
+            if (cdb_valid[p] && rob_valid[cdb_rob_idx[p]]) begin
                 n_rob_completed[cdb_rob_idx[p]] = 1'b1;
                 n_rob_exc_valid[cdb_rob_idx[p]] = cdb_exception[p];
                 n_rob_exc_cause[cdb_rob_idx[p]] = cdb_exc_cause[p];
@@ -342,30 +335,39 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
             end
         end
 
-        // Step 3: Commit (uses pre-extracted MUXes - no bypass)
-        commit_cnt = 4'h0;
-        retire_cnt = 8'h0;
-        exc_found  = 1'b0;
+        // Step 3: Commit (Standard In-Order Retirement)
+        commit_cnt  = 4'h0;
+        exc_found   = 1'b0;
+        stop_commit = 1'b0;
+        
         for (i = 0; i < COMMIT_WIDTH; i++) begin
-            if (!exc_found && commit_ack[i]) begin
-                if (commit_exc_valid_mux[i]) begin
-                    n_flush_req       = 1'b1;
-                    n_flush_target_pc = mtvec;
-                    n_exception_valid = 1'b1;
-                    n_exception_cause = commit_exc_cause_mux[i];
-                    n_exception_pc    = commit_pc_read[i];
-                    exc_found         = 1'b1;
+            if (!exc_found && !stop_commit && commit_ack[i]) begin
+                if (rob_valid[commit_c_idx[i]] && commit_completed_mux[i]) begin
+                    if (commit_exc_valid_mux[i]) begin
+                        n_flush_req       = 1'b1;
+                        n_flush_target_pc = mtvec;
+                        n_exception_valid = 1'b1;
+                        n_exception_cause = commit_exc_cause_mux[i];
+                        n_exception_pc    = commit_pc_read[i];
+                        exc_found         = 1'b1;
+                    end else begin
+                        n_rob_valid[commit_c_idx[i]] = 1'b0;
+                        commit_cnt         = commit_cnt + 1;
+                    end
                 end else begin
-                    n_rob_valid[commit_c_idx[i]] = 1'b0;
-                    commit_cnt         = commit_cnt + 1;
-                    retire_cnt         = retire_cnt + 1;
+                    // Stop commit at first uncompleted entry
+                    stop_commit = 1'b1; 
                 end
             end
         end
 
-        n_head      = (head + ROB_IDX_W'(commit_cnt)) & (ROB_ENTRIES-1);
-        n_occupancy = (n_occupancy + 8'(disp_cnt) >= retire_cnt)
-                      ? (n_occupancy + 8'(disp_cnt) - retire_cnt) : 8'h0;
+        n_head = (head + ROB_IDX_W'(commit_cnt)) & (ROB_ENTRIES-1);
+
+        // FIX V8.2: Direct Occupancy Calculation from Head and Tail pointers
+        if (n_tail >= n_head)
+            n_occupancy = n_tail - n_head;
+        else
+            n_occupancy = ROB_ENTRIES - (n_head - n_tail);
     end
 
     // =========================================================================
@@ -417,12 +419,14 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
     end
 
     // =========================================================================
-    // Output Commit Logic (Combinational) - FIX V7.5 / V7.6
+    // Output Commit Logic (Combinational)
     // =========================================================================
     always_comb begin
         logic c_exc_found;
+        logic stop_commit_out;
 
         c_exc_found = 1'b0;
+        stop_commit_out = 1'b0;
 
         for (int i = 0; i < COMMIT_WIDTH; i++) begin
             commit_valid[i]      = 1'b0;
@@ -432,7 +436,7 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
             commit_rob_idx[i]    = '0;
             commit_lsq_idx[i]    = 5'h0;
 
-            if (!c_exc_found) begin
+            if (!c_exc_found && !stop_commit_out) begin
                 if (rob_valid[commit_c_idx[i]] && commit_completed_mux[i]) begin
                     commit_p_dest[i]     = commit_p_dest_read[i];
                     commit_p_old_dest[i] = commit_p_old_dest_read[i];
@@ -441,6 +445,8 @@ module lotus_rob_masterpiece import lotus_pkg::*; #(
                     commit_lsq_idx[i]    = 5'h0;
                     commit_valid[i]      = 1'b1;
                     if (commit_exc_valid_mux[i]) c_exc_found = 1'b1;
+                end else begin
+                    stop_commit_out = 1'b1; 
                 end
             end
         end

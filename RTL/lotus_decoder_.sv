@@ -342,4 +342,25 @@ module decoder_diq_bank import lotus_pkg::*; (
     assign rd_data.is_csr       = mem_is_csr      [rd_addr];
     assign rd_data.valid        = mem_valid       [rd_addr];
 
+    // 🔴 FIX: Initialize DIQ LUTRAM to prevent X-state propagation
+    initial begin
+        for (int i = 0; i < 8; i++) begin
+            mem_pc[i]           = 64'h0;
+            mem_opcode[i]       = 8'h0;
+            mem_dest_reg[i]     = 7'h0;
+            mem_src1_reg[i]     = 7'h0;
+            mem_src2_reg[i]     = 7'h0;
+            mem_imm_data[i]     = 64'h0;
+            mem_funct3[i]       = 3'h0;
+            mem_funct7[i]       = 7'h0;
+            mem_is_tensor_op[i] = 1'b0;
+            mem_precision[i]    = 2'h0;
+            mem_is_branch[i]    = 1'b0;
+            mem_is_memory[i]    = 1'b0;
+            mem_is_illegal[i]   = 1'b0;
+            mem_is_csr[i]       = 1'b0;
+            mem_valid[i]        = 1'b0;
+        end
+    end
+
 endmodule
