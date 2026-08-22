@@ -140,12 +140,7 @@ instruction throughput is preserved while the accelerator streams data.
 
 ## Module Summary
 
-The design comprises **30 SystemVerilog source files** instantiating **35 RTL modules**
-(26 architecturally distinct functional units, 4 internal submodules, and 5 supporting/
-parameter modules). Every module is completed, synthesised, and behaviourally simulated.
-Full mathematics, worked numerical examples, per-module fix histories, and the complete
-scalar bring-up debug journal are documented in
-[`Docs and Reports/ARCHITECTURE.md`](Docs%20and%20Reports/ARCHITECTURE.md).
+The design comprises 30 SystemVerilog source files instantiating 35 RTL modules (26 architecturally distinct functional units, 4 internal submodules, and 5 supporting/parameter modules). Every module is completed, synthesised, and behaviourally simulated. Full mathematics, worked numerical examples, per-module fix histories, and the complete scalar bring-up debug journal are documented in [`Docs and Reports/ARCHITECTURE.md`](Docs%20and%20Reports/ARCHITECTURE.md).
 
 | Module | Function |
 |---|---|
@@ -194,10 +189,7 @@ slowest Artix-7 speed grade. The screenshot below shows the post-route timing su
 
 ### Timing-Closure Campaign
 
-Worst Negative Slack progressed from **-7.019 ns to +0.252 ns** across six targeted iterations,
-absorbing ~16,300 additional endpoints from the tensor-subsystem integration and L1D full-line
-datapath widening while maintaining positive slack. The complete iteration log is in
-[`Docs and Reports/ARCHITECTURE.md`](Docs%20and%20Reports/ARCHITECTURE.md).
+Worst Negative Slack progressed from **-7.019 ns to +0.252 ns** across six targeted iterations, absorbing ~16,300 additional endpoints from the tensor-subsystem integration and L1D full-line datapath widening while maintaining positive slack. The most impactful fixes were the PRF registered one-hot grant arbitration, the ALU 2-stage pipeline split, renamer output registration with pipelined TAGE training, and registered CDB-to-ROB paths. The complete iteration log is in [`Docs and Reports/ARCHITECTURE.md`](Docs%20and%20Reports/ARCHITECTURE.md).
 
 | Iteration | WNS (ns) | Failing Endpoints | Key Fix |
 |---|---|---|---|
@@ -325,12 +317,7 @@ lotus-omni/
 
 ## Documentation
 
-The primary reference is
-[`Docs and Reports/ARCHITECTURE.md`](Docs%20and%20Reports/ARCHITECTURE.md),
-which documents every module with its mathematical formulation, a worked numerical example,
-a complete per-module fix history, and the full scalar bring-up debug journal (13 bugs
-identified, root-caused, and fixed with signal-level evidence). Timing-closure details are
-in `Docs and Reports/reports/`.
+The primary reference is [`Docs and Reports/ARCHITECTURE.md`](Docs%20and%20Reports/ARCHITECTURE.md), which documents every module with its mathematical formulation, a worked numerical example, a complete per-module fix history, and the full scalar bring-up debug journal (13 bugs identified, root-caused, and fixed with signal-level evidence). Timing-closure details are in `Docs and Reports/reports/`.
 
 ---
 
