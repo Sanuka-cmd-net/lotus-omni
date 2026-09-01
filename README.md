@@ -336,4 +336,3 @@ Lotus Omni — fabless AI-semiconductor concept
 
 - **Email:** nethmirasanuak@gmail.com
 - **LinkedIn:** [linkedin.com/in/sanuka-nethmira-amarasekara](https://www.linkedin.com/in/sanuka-nethmira-amarasekara)
-- **Portfolio:** [https://62d618c9dea9d.site123.me/](https://62d618c9dea9d.site123.me/)
