@@ -332,7 +332,7 @@ and confirmed by the author using real Vivado tool output, archived in this repo
 ## Author
 
 **Sanuka Nethmira Amarasekara**
-Lotus Omni — fabless AI-semiconductor concept
+Independent Digital Design Engineer | Self-Directed RISC-V/FPGA Research
 
 - **Email:** nethmirasanuak@gmail.com
 - **LinkedIn:** [linkedin.com/in/sanuka-nethmira-amarasekara](https://www.linkedin.com/in/sanuka-nethmira-amarasekara)
