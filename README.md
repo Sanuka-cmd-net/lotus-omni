@@ -189,7 +189,7 @@ slowest Artix-7 speed grade. The screenshot below shows the post-route timing su
 
 ### Timing-Closure Campaign
 
-Worst Negative Slack progressed from **-7.019 ns to +0.252 ns** across six targeted iterations, absorbing ~16,300 additional endpoints from the tensor-subsystem integration and L1D full-line datapath widening while maintaining positive slack. The most impactful fixes were the PRF registered one-hot grant arbitration, the ALU 2-stage pipeline split, renamer output registration with pipelined TAGE training, and registered CDB-to-ROB paths. The complete iteration log is in [`Docs and Reports/ARCHITECTURE.md`](Docs%20and%20Reports/ARCHITECTURE.md).
+Worst Negative Slack progressed from **-7.019 ns to +0.252 ns** across six targeted iterations, absorbing ~16,300 additional endpoints from the tensor-subsystem integration and L1D full-line datapath widening while maintaining positive slack. The most impactful fixes were the PRF registered one-hot grant arbitration, the ALU 2-stage pipeline split, renamer output registration with pipelined TAGE training, and registered CDB-to-ROB paths. The complete iteration log is in [`Docs/ARCHITECTURE.md`](Docs/Architecture.md).
 
 | Iteration | WNS (ns) | Failing Endpoints | Key Fix |
 |---|---|---|---|
@@ -317,7 +317,7 @@ lotus-omni/
 
 ## Documentation
 
-The primary reference is [`Docs and Reports/ARCHITECTURE.md`](Docs%20and%20Reports/ARCHITECTURE.md), which documents every module with its mathematical formulation, a worked numerical example, a complete per-module fix history, and the full scalar bring-up debug journal (13 bugs identified, root-caused, and fixed with signal-level evidence). Timing-closure details are in `Docs and Reports/reports/`.
+The primary reference is [`Docs/ARCHITECTURE.md`](Docs/Architecture.md), which documents every module with its mathematical formulation, a worked numerical example, a complete per-module fix history, and the full scalar bring-up debug journal (13 bugs identified, root-caused, and fixed with signal-level evidence). Timing-closure details are in `Docs and Reports/reports/`.
 
 ---
 
