@@ -184,7 +184,7 @@ slowest Artix-7 speed grade. The screenshot below shows the post-route timing su
 
 <!-- IMAGE: place your Vivado timing summary screenshot at images/implementation_complete.png -->
 <p align="center">
-  <img src="Docs and Reports/Reported screenshot/Implemented Design.png" alt="Vivado implementation complete, timing met at 80 MHz" width="900"/>
+  <img src="screenshots/Reported screenshot/Implemented Design.png" alt="Vivado implementation complete, timing met at 80 MHz" width="900"/>
 </p>
 
 ### Timing-Closure Campaign
