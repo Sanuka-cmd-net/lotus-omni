@@ -296,20 +296,22 @@ bring-up workload. The remaining active debug target is the store-drain → L1D 
 
 ```
 lotus-omni/
-├── RTL/                              # 30 SystemVerilog source files
-├── TB/                               # Self-checking testbenches
-├── Constraints/                      # Out-of-context timing constraints (80 MHz)
-├── Docs and Reports/
-│   ├── ARCHITECTURE.md               # Full microarchitecture reference (35 modules)
-│   │                                 # + complete scalar bring-up debug journal
-│   ├── Reports (.rpt file type)/     # Raw Vivado timing / utilisation / DRC reports
-│   └── Reported screenshot/          # Vivado design screenshots
-│                                     #   (Dataflow, Elaborated, Synthesized,
-│                                     #    Implemented, Schematic, floorplan)
-├── Simulation Screenshot/            # Behavioural-simulation waveforms
-│                                     #   (Demo 1 AXI, Demo 2 IFU, Demo 3 full-core+tensor)
+├── rtl/                        # 30 SystemVerilog source files
+├── tb/                         # Self-checking testbenches
+├── constraints/                # Out-of-context timing constraints (80 MHz)
+├── docs/
+│   ├── Architecture.md                 # Full microarchitecture reference (35 modules)
+│   │                                   #   + complete scalar bring-up debug journal
+│   └── reports (rpt type files)/       # Raw Vivado timing / utilisation / DRC reports
+├── screenshots/
+│   ├── implementation/         # Vivado design screenshots
+│   │                           #   (Dataflow, Elaborated, Synthesized,
+│   │                           #    Implemented, Schematic, floorplan)
+│   └── simulation/             # Behavioural-simulation waveforms
+│                                #   (Demo 1 AXI, Demo 2 IFU, Demo 3 full-core+tensor)
 ├── .gitattributes
 ├── .gitignore
+├── LICENSE
 └── README.md
 ```
 
